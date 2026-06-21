@@ -72,6 +72,32 @@ interface AppState {
   updateLastChatMessage: (content: string) => void;
   setChatLoading: (loading: boolean) => void;
   clearChat: () => void;
+
+  // Highlights, Notes & Doc Text (Sprint 4)
+  activeTab: 'map' | 'text';
+  setActiveTab: (tab: 'map' | 'text') => void;
+  documentText: string | null;
+  setDocumentText: (text: string | null) => void;
+  notes: NoteInfo[];
+  setNotes: (notes: NoteInfo[]) => void;
+  addNote: (note: NoteInfo) => void;
+  highlights: HighlightInfo[];
+  setHighlights: (highlights: HighlightInfo[]) => void;
+  addHighlight: (highlight: HighlightInfo) => void;
+}
+
+export interface NoteInfo {
+  id: string;
+  content: string;
+  created_at: string;
+  concepts?: string[];
+}
+
+export interface HighlightInfo {
+  id: string;
+  text: string;
+  page: number;
+  doc_title: string;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -145,4 +171,16 @@ export const useStore = create<AppState>((set) => ({
   }),
   setChatLoading: (loading) => set({ chatLoading: loading }),
   clearChat: () => set({ chatMessages: [] }),
+
+  // Highlights, Notes & Doc Text states (Sprint 4)
+  activeTab: 'map',
+  setActiveTab: (tab) => set({ activeTab: tab }),
+  documentText: null,
+  setDocumentText: (text) => set({ documentText: text }),
+  notes: [],
+  setNotes: (notes) => set({ notes }),
+  addNote: (note) => set((state) => ({ notes: [note, ...state.notes] })),
+  highlights: [],
+  setHighlights: (highlights) => set({ highlights }),
+  addHighlight: (highlight) => set((state) => ({ highlights: [highlight, ...state.highlights] })),
 }));

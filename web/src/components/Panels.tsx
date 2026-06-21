@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 
 // ==================== LEFT SIDEBAR ====================
+// ==================== LEFT SIDEBAR ====================
 interface LeftSidebarProps {
   onOpenUpload: () => void;
 }
@@ -20,6 +21,31 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const setGraphData = useStore((state) => state.setGraphData);
   const user = useStore((state) => state.user);
 
+  // Notes state (Sprint 4)
+  const notes = useStore((state) => state.notes);
+  const setNotes = useStore((state) => state.setNotes);
+  const addNote = useStore((state) => state.addNote);
+  const [activeNavTab, setActiveNavTab] = useState<'navigation' | 'notes'>('navigation');
+  const [noteSearch, setNoteSearch] = useState('');
+  const [noteInput, setNoteInput] = useState('');
+  const [noteSubmitLoading, setNoteSubmitLoading] = useState(false);
+
+  // Fetch notes on load
+  useEffect(() => {
+    const fetchNotes = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/notes');
+        if (response.ok) {
+          const data = await response.json();
+          setNotes(data);
+        }
+      } catch (err) {
+        console.error('Failed to load notes', err);
+      }
+    };
+    fetchNotes();
+  }, [setNotes]);
+
   const handleDocumentSelect = async (docId: string) => {
     setActiveDocumentId(docId);
     try {
@@ -30,6 +56,51 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
       }
     } catch (err) {
       console.error('Failed to load document graph', err);
+    }
+  };
+
+  const handleNoteSearchChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const q = e.target.value;
+    setNoteSearch(q);
+    try {
+      const url = q.trim()
+        ? `http://localhost:8000/notes/search?q=${encodeURIComponent(q)}`
+        : 'http://localhost:8000/notes';
+      const response = await fetch(url);
+      if (response.ok) {
+        const data = await response.json();
+        setNotes(data);
+      }
+    } catch (err) {
+      console.error('Failed to search notes', err);
+    }
+  };
+
+  const handleAddNote = async () => {
+    if (!noteInput.trim()) return;
+    setNoteSubmitLoading(true);
+    try {
+      const response = await fetch('http://localhost:8000/notes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content: noteInput }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        addNote(data);
+        setNoteInput('');
+        
+        // Refresh graph to show newly added Note node & links
+        if (activeDocumentId) {
+          handleDocumentSelect(activeDocumentId);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to save note', err);
+    } finally {
+      setNoteSubmitLoading(false);
     }
   };
 
@@ -47,74 +118,159 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
       </div>
 
       {/* User Session Badge */}
-      <div className="px-4 py-3 border-b border-slate-800/60 flex items-center gap-2 bg-slate-900/20">
-        <UserCheck className="w-4 h-4 text-emerald-400" />
-        <div className="min-w-0">
-          <p className="text-xs font-semibold text-slate-300 truncate">{user?.email || 'Guest User'}</p>
-          <p className="text-[9px] text-slate-500 font-medium capitalize">{user?.role || 'student'}</p>
+      <div className="px-4 py-3 border-b border-slate-800/60 flex items-center justify-between bg-slate-900/20">
+        <div className="flex items-center gap-2">
+          <UserCheck className="w-4 h-4 text-emerald-400" />
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-slate-300 truncate">{user?.email || 'Guest User'}</p>
+            <p className="text-[9px] text-slate-500 font-medium capitalize">{user?.role || 'student'}</p>
+          </div>
         </div>
       </div>
 
-      {/* Ingest Actions */}
-      <div className="p-3">
+      {/* Nav Selector Tabs */}
+      <div className="px-3 pt-3 flex gap-1 border-b border-slate-800/40 pb-2">
         <button
-          onClick={onOpenUpload}
-          className="w-full py-2 px-3.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg hover:shadow-indigo-500/25 transition-all duration-200"
+          onClick={() => setActiveNavTab('navigation')}
+          className={`flex-1 py-1.5 text-[10px] font-extrabold rounded-lg uppercase tracking-wider transition-colors ${
+            activeNavTab === 'navigation'
+              ? 'bg-slate-800 text-slate-100 border border-slate-700/60'
+              : 'text-slate-500 hover:text-slate-300'
+          }`}
         >
-          <Plus className="w-4 h-4" />
-          Ingest Document
+          Index
+        </button>
+        <button
+          onClick={() => setActiveNavTab('notes')}
+          className={`flex-1 py-1.5 text-[10px] font-extrabold rounded-lg uppercase tracking-wider transition-colors ${
+            activeNavTab === 'notes'
+              ? 'bg-slate-800 text-slate-100 border border-slate-700/60'
+              : 'text-slate-500 hover:text-slate-300'
+          }`}
+        >
+          Notes ({notes.length})
         </button>
       </div>
 
-      {/* Pages Navigation */}
-      <nav className="flex-1 px-2.5 py-2 overflow-y-auto space-y-1">
-        <div className="text-[10px] text-slate-500 font-bold px-2 py-1 tracking-wider">SECTIONS</div>
-        <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-slate-300 bg-white/5 rounded-lg border border-white/5"><GraduationCap className="w-4 h-4 text-indigo-400" /> Concepts</a>
-        <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"><BookOpen className="w-4 h-4" /> Papers</a>
-        <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"><Landmark className="w-4 h-4" /> Authors</a>
-        <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"><Tag className="w-4 h-4" /> Keywords</a>
-        <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"><Map className="w-4 h-4" /> Learning Paths</a>
-
-        {/* Documents Queue */}
-        <div className="pt-4 space-y-1">
-          <div className="text-[10px] text-slate-500 font-bold px-2 py-1 tracking-wider">DOCUMENTS QUEUE</div>
-          {documents.length === 0 ? (
-            <div className="px-3 py-4 text-center rounded-lg border border-dashed border-slate-800 text-[10px] text-slate-500 font-medium">
-              No documents ingested yet.
-            </div>
-          ) : (
-            documents.map((doc) => (
+      {/* Main navigation area */}
+      <div className="flex-1 overflow-y-auto min-h-0">
+        {activeNavTab === 'navigation' ? (
+          <div className="p-2.5 space-y-4">
+            {/* Ingest Actions */}
+            <div>
               <button
-                key={doc.id}
-                onClick={() => handleDocumentSelect(doc.id)}
-                className={`w-full text-left px-3 py-2 rounded-lg flex flex-col gap-1 border transition-all ${
-                  activeDocumentId === doc.id
-                    ? 'bg-indigo-500/10 border-indigo-500/30 text-slate-100'
-                    : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
-                }`}
+                onClick={onOpenUpload}
+                className="w-full py-2 px-3.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg hover:shadow-indigo-500/25 transition-all duration-200"
               >
-                <div className="flex items-center gap-2 w-full">
-                  <FileText className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
-                  <span className="text-[11px] font-semibold truncate flex-1">{doc.title}</span>
-                </div>
-                {doc.status !== 'done' && (
-                  <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden mt-1">
-                    <div 
-                      className={`h-full rounded-full ${doc.status === 'error' ? 'bg-rose-500' : 'bg-indigo-500'}`}
-                      style={{ width: `${doc.progress_pct}%` }}
-                    />
-                  </div>
-                )}
+                <Plus className="w-4 h-4" />
+                Ingest Document
               </button>
-            ))
-          )}
-        </div>
-      </nav>
+            </div>
+
+            {/* Navigation options */}
+            <nav className="space-y-1">
+              <div className="text-[10px] text-slate-500 font-bold px-2 py-1 tracking-wider">SECTIONS</div>
+              <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-slate-300 bg-white/5 rounded-lg border border-white/5"><GraduationCap className="w-4 h-4 text-indigo-400" /> Concepts</a>
+              <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"><BookOpen className="w-4 h-4" /> Papers</a>
+              <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"><Landmark className="w-4 h-4" /> Authors</a>
+              <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"><Tag className="w-4 h-4" /> Keywords</a>
+              <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"><Map className="w-4 h-4" /> Learning Paths</a>
+            </nav>
+
+            {/* Documents Queue */}
+            <div className="space-y-1">
+              <div className="text-[10px] text-slate-500 font-bold px-2 py-1 tracking-wider">DOCUMENTS QUEUE</div>
+              {documents.length === 0 ? (
+                <div className="px-3 py-4 text-center rounded-lg border border-dashed border-slate-800 text-[10px] text-slate-500 font-medium">
+                  No documents ingested yet.
+                </div>
+              ) : (
+                documents.map((doc) => (
+                  <button
+                    key={doc.id}
+                    onClick={() => handleDocumentSelect(doc.id)}
+                    className={`w-full text-left px-3 py-2 rounded-lg flex flex-col gap-1 border transition-all ${
+                      activeDocumentId === doc.id
+                        ? 'bg-indigo-500/10 border-indigo-500/30 text-slate-100'
+                        : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 w-full">
+                      <FileText className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
+                      <span className="text-[11px] font-semibold truncate flex-1">{doc.title}</span>
+                    </div>
+                    {doc.status !== 'done' && (
+                      <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden mt-1">
+                        <div 
+                          className={`h-full rounded-full ${doc.status === 'error' ? 'bg-rose-500' : 'bg-indigo-500'}`}
+                          style={{ width: `${doc.progress_pct}%` }}
+                        />
+                      </div>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        ) : (
+          /* Notes Composer & List (Sprint 4) */
+          <div className="p-3 space-y-4">
+            {/* Notes Search */}
+            <input
+              type="text"
+              value={noteSearch}
+              onChange={handleNoteSearchChange}
+              placeholder="Search notes & links..."
+              className="w-full px-3 py-1.5 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] text-slate-200 focus:outline-none focus:border-indigo-500/50"
+            />
+
+            {/* Note Composer */}
+            <div className="space-y-2">
+              <textarea
+                value={noteInput}
+                onChange={(e) => setNoteInput(e.target.value)}
+                placeholder="Write a personal note..."
+                className="w-full h-20 p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-[11px] text-slate-300 focus:outline-none focus:border-indigo-500/50 resize-none font-medium leading-relaxed"
+              />
+              <button
+                disabled={noteSubmitLoading || !noteInput.trim()}
+                onClick={handleAddNote}
+                className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:bg-slate-800 text-white rounded-lg font-bold text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-md"
+              >
+                {noteSubmitLoading ? 'Saving...' : 'Add Note'}
+              </button>
+            </div>
+
+            {/* Scrollable list of Notes */}
+            <div className="space-y-2.5 pt-2">
+              <div className="text-[10px] text-slate-500 font-bold tracking-wider">SAVED NOTES</div>
+              {notes.length === 0 ? (
+                <div className="text-center py-4 text-[10px] text-slate-500 font-medium">No notes saved.</div>
+              ) : (
+                notes.map((note) => (
+                  <div key={note.id} className="p-2.5 rounded-lg bg-slate-900/55 border border-slate-800/70 space-y-2">
+                    <p className="text-[11px] text-slate-300 font-medium leading-relaxed whitespace-pre-wrap">{note.content}</p>
+                    {note.concepts && note.concepts.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {note.concepts.map((c: string, idx: number) => (
+                          <span key={idx} className="bg-indigo-500/10 text-indigo-300 border border-indigo-500/10 px-1.5 py-0.5 rounded text-[8px] font-bold">
+                            {c}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Footer Support Info */}
       <div className="p-4 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-500 font-medium">
         <span className="flex items-center gap-1.5"><HelpCircle className="w-3.5 h-3.5" /> Docs</span>
-        <span>Sprint 2 Live</span>
+        <span>Sprint 4 Live</span>
       </div>
     </aside>
   );
@@ -448,6 +604,24 @@ export function RightSidebar() {
 // ==================== BOTTOM PANEL ====================
 export function BottomPanel() {
   const [isExpanded, setIsExpanded] = useState(true);
+  const highlights = useStore((state) => state.highlights);
+  const setHighlights = useStore((state) => state.setHighlights);
+
+  // Fetch highlights on mount
+  useEffect(() => {
+    const fetchHighlights = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/highlights');
+        if (response.ok) {
+          const data = await response.json();
+          setHighlights(data);
+        }
+      } catch (err) {
+        console.error('Failed to load highlights', err);
+      }
+    };
+    fetchHighlights();
+  }, [setHighlights]);
 
   return (
     <footer className="w-full glass-panel border-t border-slate-800 bg-[#0d1323]/80 select-none">
@@ -457,7 +631,7 @@ export function BottomPanel() {
         className="px-4 py-2 border-b border-slate-800/50 flex items-center justify-between cursor-pointer hover:bg-white/5 transition-colors"
       >
         <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-          Highlights · Bookmarks · Recent Nodes
+          Highlights · Bookmarks · Recent Insights
         </span>
         <button className="text-slate-400 hover:text-white">
           {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
@@ -467,18 +641,23 @@ export function BottomPanel() {
       {/* Content drawer */}
       {isExpanded && (
         <div className="h-[92px] p-3 overflow-x-auto flex gap-3 scrollbar-thin">
-          <div className="min-w-[200px] max-w-[200px] h-full rounded-lg border border-dashed border-slate-800 p-2 flex flex-col justify-center items-center text-center text-[10px] text-slate-500 font-medium">
-            No highlights saved yet.
-          </div>
-          <div className="min-w-[240px] max-w-[240px] p-2.5 glass-card rounded-lg border border-slate-800 flex flex-col justify-between">
-            <p className="text-[10px] text-slate-400 italic line-clamp-2 leading-relaxed">
-              "Attention weights denote how strongly tokens connect dynamically."
-            </p>
-            <div className="flex justify-between items-center text-[8px] text-indigo-400 font-bold uppercase tracking-wide">
-              <span>Attention Paper</span>
-              <span className="text-[8px] font-medium text-slate-500">Page 4</span>
+          {highlights.length === 0 ? (
+            <div className="min-w-[200px] max-w-[200px] h-full rounded-lg border border-dashed border-slate-800 p-2 flex flex-col justify-center items-center text-center text-[10px] text-slate-500 font-medium">
+              No highlights saved yet.
             </div>
-          </div>
+          ) : (
+            highlights.map((hl) => (
+              <div key={hl.id} className="min-w-[240px] max-w-[240px] p-2.5 glass-card rounded-lg border border-slate-800 flex flex-col justify-between">
+                <p className="text-[10px] text-slate-300 italic line-clamp-2 leading-relaxed font-semibold">
+                  "{hl.text}"
+                </p>
+                <div className="flex justify-between items-center text-[8px] text-indigo-400 font-bold uppercase tracking-wide">
+                  <span className="truncate max-w-[150px]">{hl.doc_title}</span>
+                  <span className="text-[8px] font-medium text-slate-500 flex-shrink-0">Page {hl.page}</span>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       )}
     </footer>

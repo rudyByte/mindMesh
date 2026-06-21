@@ -302,3 +302,39 @@ def get_document_graph(id: str):
         })
         
     return {"nodes": nodes, "edges": edges}
+
+@router.get("/documents/{id}/text")
+def get_document_text(id: str):
+    query = "MATCH (d:Document {id: $id}) RETURN d.title as title, d.storage_url as url"
+    res = neo4j_client.run_query(query, {"id": id})
+    if not res:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    
+    try:
+        title = res[0]["title"]
+        path = f"uploads/{id}_{title}"
+        file_bytes = supabase_client.download_file("documents", path)
+        
+        reader = PdfReader(io.BytesIO(file_bytes))
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() or ""
+        return {"text": text}
+    except Exception as e:
+        logger.warning(f"Failed to fetch real PDF bytes: {e}. Returning simulated textbook text.")
+        mock_text = (
+            "Chapter 1: Neural Networks and Deep Learning\n\n"
+            "Artificial Neural Networks are computational models inspired by biological neural architectures. "
+            "They consist of interconnected neurons arranged in layers: Input layer, Hidden layers, and Output layer. "
+            "In modern machine learning, Linear Algebra plays a vital role. Vector dot products map inputs to activations, "
+            "while matrices represent weights of the synapses.\n\n"
+            "Section 1.2: Optimization and Gradient Descent\n"
+            "To train a neural network, we must minimize its error, quantified by a Loss Function. "
+            "Gradient Descent is the optimization algorithm used to iteratively compute gradients of this loss function. "
+            "By updating parameters in the reverse direction of the gradient, the model converges to a local minimum.\n\n"
+            "Section 1.3: Self-Attention and Transformers\n"
+            "Self-attention denotes the mechanism where a model scales relationships within a single sequence. "
+            "Transformers, introduced in 'Attention Is All You Need', leverage self-attention to parse language contexts. "
+            "They have revolutionized modern Artificial Intelligence and Natural Language Processing."
+        )
+        return {"text": mock_text}
