@@ -6,6 +6,7 @@ import { useStore } from '../store/useStore';
 import { LeftSidebar, RightSidebar, BottomPanel } from '../components/Panels';
 import GraphCanvas from '../components/GraphCanvas';
 import UploadModal from '../components/UploadModal';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { FileText, Map as MapIcon, Sparkles } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -132,7 +133,9 @@ export default function DashboardPage() {
       {/* 3-Pane workspace layout */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left side controller navigation */}
-        <LeftSidebar onOpenUpload={() => setIsUploadOpen(true)} />
+        <ErrorBoundary name="Left Navigation Panel">
+          <LeftSidebar onOpenUpload={() => setIsUploadOpen(true)} />
+        </ErrorBoundary>
         
         {/* Center flexible canvas area */}
         <div className="flex-1 h-full relative flex flex-col">
@@ -167,54 +170,62 @@ export default function DashboardPage() {
           {/* Main Tab Render */}
           <div className="flex-1 min-h-0 relative">
             {activeTab === 'map' ? (
-              <GraphCanvas />
+              <ErrorBoundary name="Knowledge Graph Canvas">
+                <GraphCanvas />
+              </ErrorBoundary>
             ) : (
               /* PDF Document Raw Text Viewer (Sprint 4) */
-              <div 
-                className="w-full h-full p-8 overflow-y-auto bg-[#030712] font-sans flex flex-col items-center"
-                onMouseUp={handleTextSelection}
-              >
-                <div className="w-full max-w-2xl space-y-6 select-text text-justify relative">
-                  <div className="border-b border-slate-800 pb-4 mb-4 select-none">
-                    <h2 className="text-sm font-bold text-indigo-400 flex items-center gap-2">
-                      <FileText className="w-4 h-4" /> {activeDocTitle}
-                    </h2>
-                    <p className="text-[10px] text-slate-500 mt-1 font-medium">
-                      Select any text block to save key insights as graph highlights.
+              <ErrorBoundary name="Document Text Reader">
+                <div 
+                  className="w-full h-full p-8 overflow-y-auto bg-[#030712] font-sans flex flex-col items-center"
+                  onMouseUp={handleTextSelection}
+                >
+                  <div className="w-full max-w-2xl space-y-6 select-text text-justify relative">
+                    <div className="border-b border-slate-800 pb-4 mb-4 select-none">
+                      <h2 className="text-sm font-bold text-indigo-400 flex items-center gap-2">
+                        <FileText className="w-4 h-4" /> {activeDocTitle}
+                      </h2>
+                      <p className="text-[10px] text-slate-500 mt-1 font-medium">
+                        Select any text block to save key insights as graph highlights.
+                      </p>
+                    </div>
+
+                    <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap font-medium">
+                      {documentText || "Parsing document content..."}
                     </p>
+
+                    {/* Selection Highlight Popover Insight Button */}
+                    {popoverCoords && (
+                      <button
+                        onClick={handleSaveHighlight}
+                        style={{
+                          position: 'fixed',
+                          left: `${popoverCoords.x}px`,
+                          top: `${popoverCoords.y}px`,
+                          transform: 'translateX(-50%)',
+                        }}
+                        className="z-30 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-[10px] font-bold rounded-lg shadow-xl hover:scale-105 transition-all duration-150 flex items-center gap-1 border border-indigo-400/20 select-none animate-bounce"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" /> Save as Insight
+                      </button>
+                    )}
                   </div>
-
-                  <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap font-medium">
-                    {documentText || "Parsing document content..."}
-                  </p>
-
-                  {/* Selection Highlight Popover Insight Button */}
-                  {popoverCoords && (
-                    <button
-                      onClick={handleSaveHighlight}
-                      style={{
-                        position: 'fixed',
-                        left: `${popoverCoords.x}px`,
-                        top: `${popoverCoords.y}px`,
-                        transform: 'translateX(-50%)',
-                      }}
-                      className="z-30 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-[10px] font-bold rounded-lg shadow-xl hover:scale-105 transition-all duration-150 flex items-center gap-1 border border-indigo-400/20 select-none animate-bounce"
-                    >
-                      <Sparkles className="w-3.5 h-3.5" /> Save as Insight
-                    </button>
-                  )}
                 </div>
-              </div>
+              </ErrorBoundary>
             )}
           </div>
         </div>
         
         {/* Right side AI reasoning HUD */}
-        <RightSidebar />
+        <ErrorBoundary name="AI Assistant Panel">
+          <RightSidebar />
+        </ErrorBoundary>
       </div>
 
       {/* Bottom highlights and bookmarks drawer */}
-      <BottomPanel />
+      <ErrorBoundary name="Insights Feed Drawer">
+        <BottomPanel />
+      </ErrorBoundary>
 
       {/* Document ingestion Modal popover */}
       <UploadModal isOpen={isUploadOpen} onClose={() => setIsUploadOpen(false)} />

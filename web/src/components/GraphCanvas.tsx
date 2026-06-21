@@ -9,9 +9,35 @@ import { Layers, Compass, Loader2 } from 'lucide-react';
 const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), {
   ssr: false,
   loading: () => (
-    <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950/20 text-slate-400 gap-3">
-      <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
-      <span>Loading Canvas...</span>
+    <div className="w-full h-full relative overflow-hidden bg-[#030712] flex flex-col items-center justify-center text-slate-500 select-none">
+      {/* Premium pulsing mesh background */}
+      <div className="absolute inset-0 grid grid-cols-12 grid-rows-12 gap-1 opacity-[0.03]">
+        {Array.from({ length: 144 }).map((_, i) => (
+          <div key={i} className="border border-slate-500 rounded-sm w-full h-full" />
+        ))}
+      </div>
+      
+      {/* Floating pulsing nodes simulation */}
+      <div className="absolute inset-0 flex items-center justify-center opacity-10">
+        <div className="relative w-[300px] h-[300px] animate-pulse">
+          <div className="absolute top-[20%] left-[30%] w-6 h-6 rounded-full bg-indigo-500" />
+          <div className="absolute top-[50%] left-[60%] w-8 h-8 rounded-full bg-purple-500" />
+          <div className="absolute top-[70%] left-[20%] w-5 h-5 rounded-full bg-emerald-500" />
+          <div className="absolute top-[40%] left-[10%] w-7 h-7 rounded-full bg-amber-500" />
+          {/* Simple connections */}
+          <svg className="absolute inset-0 w-full h-full stroke-slate-500 stroke-[0.5] fill-none">
+            <line x1="30%" y1="20%" x2="60%" y2="50%" />
+            <line x1="60%" y1="50%" x2="20%" y2="70%" />
+            <line x1="20%" y1="70%" x2="10%" y2="40%" />
+            <line x1="10%" y1="40%" x2="30%" y2="20%" />
+          </svg>
+        </div>
+      </div>
+
+      <div className="relative z-10 flex flex-col items-center gap-3">
+        <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
+        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Initializing Space Map...</span>
+      </div>
     </div>
   ),
 });

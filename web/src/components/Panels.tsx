@@ -31,11 +31,38 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const citations = useStore((state) => state.citations);
   const setCitations = useStore((state) => state.setCitations);
   const [copiedCitationId, setCopiedCitationId] = useState<string | null>(null);
+  const [citationsLoading, setCitationsLoading] = useState(false);
 
   const [activeNavTab, setActiveNavTab] = useState<'navigation' | 'notes' | 'citations'>('navigation');
   const [noteSearch, setNoteSearch] = useState('');
   const [noteInput, setNoteInput] = useState('');
   const [noteSubmitLoading, setNoteSubmitLoading] = useState(false);
+
+  // Health check state (Sprint 6)
+  const [healthStatus, setHealthStatus] = useState<{
+    neo4j: { status: string; mode: string };
+    supabase: { status: string; mode: string };
+    anthropic: { status: string; mode: string };
+  } | null>(null);
+
+  // Fetch health status
+  useEffect(() => {
+    const fetchHealth = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/health/deep');
+        if (response.ok) {
+          const data = await response.json();
+          setHealthStatus(data.services);
+        }
+      } catch (err) {
+        console.error('Failed to fetch system health status', err);
+      }
+    };
+    
+    fetchHealth();
+    const interval = setInterval(fetchHealth, 15000); // Check every 15s
+    return () => clearInterval(interval);
+  }, []);
 
   // Fetch notes on load
   useEffect(() => {
@@ -56,6 +83,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   // Fetch citations on load
   useEffect(() => {
     const fetchCitations = async () => {
+      setCitationsLoading(true);
       try {
         const response = await fetch('http://localhost:8000/citations');
         if (response.ok) {
@@ -64,6 +92,8 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
         }
       } catch (err) {
         console.error('Failed to load citations', err);
+      } finally {
+        setCitationsLoading(false);
       }
     };
     fetchCitations();
@@ -280,7 +310,9 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
             <div className="space-y-2.5 pt-2">
               <div className="text-[10px] text-slate-500 font-bold tracking-wider">SAVED NOTES</div>
               {notes.length === 0 ? (
-                <div className="text-center py-4 text-[10px] text-slate-500 font-medium">No notes saved.</div>
+                <div className="text-center py-6 text-[10px] text-slate-500 border border-dashed border-slate-800/60 rounded-lg font-medium">
+                  No notes saved yet. Write a personal note above to capture insights.
+                </div>
               ) : (
                 notes.map((note) => (
                   <div key={note.id} className="p-2.5 rounded-lg bg-slate-900/55 border border-slate-800/70 space-y-2">
@@ -306,7 +338,17 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
           <div className="p-3 space-y-4">
             <div className="space-y-2.5">
               <div className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Saved Citations</div>
-              {citations.length === 0 ? (
+              {citationsLoading ? (
+                <div className="space-y-2.5">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="p-3 rounded-lg bg-slate-900/30 border border-slate-800/50 space-y-2.5 animate-pulse">
+                      <div className="w-12 h-3 bg-slate-800 rounded" />
+                      <div className="w-24 h-2 bg-slate-800 rounded" />
+                      <div className="w-full h-8 bg-slate-950/40 rounded border border-slate-900" />
+                    </div>
+                  ))}
+                </div>
+              ) : citations.length === 0 ? (
                 <div className="text-center py-6 text-[10px] text-slate-500 border border-dashed border-slate-800 rounded-lg font-medium">
                   No citations saved yet. Select a Paper node to format and save a citation.
                 </div>
@@ -357,7 +399,18 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
       {/* Footer Support Info */}
       <div className="p-4 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-500 font-medium">
         <span className="flex items-center gap-1.5"><HelpCircle className="w-3.5 h-3.5" /> Docs</span>
-        <span>Sprint 5 Live</span>
+        <div className="flex items-center gap-2">
+          {healthStatus ? (
+            <div className="flex items-center gap-1.5" title={`Neo4j: ${healthStatus.neo4j.status} (${healthStatus.neo4j.mode})\nSupabase: ${healthStatus.supabase.status} (${healthStatus.supabase.mode})\nAI: ${healthStatus.anthropic.status} (${healthStatus.anthropic.mode})`}>
+              <span className="text-[9px] font-bold text-slate-600 mr-0.5">STATUS:</span>
+              <span className={`w-2 h-2 rounded-full cursor-help ${healthStatus.neo4j.status === 'ok' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]' : 'bg-rose-500 animate-ping'}`} title={`Neo4j (${healthStatus.neo4j.mode})`} />
+              <span className={`w-2 h-2 rounded-full cursor-help ${healthStatus.supabase.status === 'ok' ? 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.6)]' : 'bg-rose-500 animate-ping'}`} title={`Supabase (${healthStatus.supabase.mode})`} />
+              <span className={`w-2 h-2 rounded-full cursor-help ${healthStatus.anthropic.status === 'ok' ? 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)]' : 'bg-rose-500 animate-ping'}`} title={`AI Copilot (${healthStatus.anthropic.mode})`} />
+            </div>
+          ) : (
+            <span className="animate-pulse text-[9px] text-slate-600">Verifying status...</span>
+          )}
+        </div>
       </div>
     </aside>
   );
@@ -602,7 +655,31 @@ export function RightSidebar() {
             </div>
 
             {/* Context Card (Sprint 3) */}
-            {contextCard && (
+            {contextLoading ? (
+              <div className="p-3.5 glass-card rounded-xl border border-indigo-500/10 bg-indigo-500/5 space-y-3 animate-pulse">
+                <h4 className="text-[10px] font-bold text-indigo-400 uppercase tracking-wide flex items-center gap-1">
+                  <Map className="w-3.5 h-3.5 text-indigo-400" /> Graph Context Details
+                </h4>
+                <div className="space-y-2">
+                  <div className="w-24 h-3 bg-slate-800 rounded" />
+                  <div className="flex gap-1 mt-1">
+                    <div className="w-16 h-5 bg-slate-800 rounded border border-slate-700/30" />
+                    <div className="w-20 h-5 bg-slate-800 rounded border border-slate-700/30" />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div className="w-16 h-3 bg-slate-800 rounded" />
+                  <div className="flex gap-1 mt-1">
+                    <div className="w-24 h-5 bg-slate-800 rounded border border-slate-700/30" />
+                    <div className="w-12 h-5 bg-slate-800 rounded border border-slate-700/30" />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div className="w-20 h-3 bg-slate-800 rounded" />
+                  <div className="w-full h-6 bg-slate-800/60 rounded border border-slate-700/30" />
+                </div>
+              </div>
+            ) : contextCard ? (
               <div className="p-3.5 glass-card rounded-xl border border-indigo-500/10 bg-indigo-500/5 space-y-3">
                 <h4 className="text-[10px] font-bold text-indigo-400 uppercase tracking-wide flex items-center gap-1">
                   <Map className="w-3.5 h-3.5" /> Graph Context Details
@@ -656,7 +733,7 @@ export function RightSidebar() {
                   )}
                 </div>
               </div>
-            )}
+            ) : null}
 
             {/* Citation Formatter (Sprint 5) */}
             {selectedNode.label === 'Paper' && (
@@ -951,8 +1028,8 @@ export function BottomPanel() {
       {isExpanded && (
         <div className="h-[92px] p-3 overflow-x-auto flex gap-3 scrollbar-thin">
           {highlights.length === 0 ? (
-            <div className="min-w-[200px] max-w-[200px] h-full rounded-lg border border-dashed border-slate-800 p-2 flex flex-col justify-center items-center text-center text-[10px] text-slate-500 font-medium">
-              No highlights saved yet.
+            <div className="min-w-[260px] max-w-[260px] h-full rounded-lg border border-dashed border-slate-800 p-3 flex flex-col justify-center items-center text-center text-[10px] text-slate-500 font-medium">
+              No highlights saved yet. Select document text to save key insights.
             </div>
           ) : (
             highlights.map((hl) => (

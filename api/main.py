@@ -38,6 +38,13 @@ def startup_event():
         neo4j_client.execute_migration(migration_path)
     else:
         logger.warning(f"Migration file not found at {migration_path}")
+        
+    # Execute Neo4j seed migration on start
+    seed_path = os.path.join(os.path.dirname(__file__), "migrations", "seed.cypher")
+    if os.path.exists(seed_path):
+        neo4j_client.execute_migration(seed_path)
+    else:
+        logger.warning(f"Seed file not found at {seed_path}")
 
 @app.on_event("shutdown")
 def shutdown_event():
