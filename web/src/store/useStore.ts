@@ -57,6 +57,8 @@ interface AppState {
   setGraphMode: (mode: 'basic' | 'advanced') => void;
   setGraphData: (data: GraphData) => void;
   appendGraphData: (data: GraphData) => void;
+  graphFilter: string | null;
+  setGraphFilter: (filter: string | null) => void;
 
   // Documents state
   activeDocumentId: string | null;
@@ -132,6 +134,8 @@ export const useStore = create<AppState>((set) => ({
   graphMode: 'basic',
   setGraphMode: (mode) => set({ graphMode: mode }),
   setGraphData: (data) => set({ nodes: data.nodes, edges: data.edges }),
+  graphFilter: null,
+  setGraphFilter: (filter) => set({ graphFilter: filter }),
   appendGraphData: (data) => set((state) => {
     // Deduplicate nodes
     const nodeMap = new Map(state.nodes.map(n => [n.id, n]));

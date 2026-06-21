@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useStore, GraphNode, GraphEdge } from '../store/useStore';
 import { Layers, Compass, Loader2 } from 'lucide-react';
+import { forceCollide } from 'd3-force';
 
 // Dynamically import force graph to prevent SSR errors in Next.js
 const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), {
@@ -60,6 +61,17 @@ export default function GraphCanvas() {
   const setGraphData = useStore((state) => state.setGraphData);
   const appendGraphData = useStore((state) => state.appendGraphData);
   const activePathNodeIds = useStore((state) => state.activePathNodeIds);
+  const documents = useStore((state) => state.documents);
+  const activeDocumentId = useStore((state) => state.activeDocumentId);
+
+  const shouldZoomToFit = useRef(false);
+
+  // Set zoom to fit flag when nodes are loaded or active document changes
+  useEffect(() => {
+    if (nodes.length > 0) {
+      shouldZoomToFit.current = true;
+    }
+  }, [nodes.length, activeDocumentId]);
 
   // Track dimensions
   useEffect(() => {
@@ -75,7 +87,7 @@ export default function GraphCanvas() {
     return () => window.removeEventListener('resize', updateDimensions);
   }, []);
 
-  // Fetch initial graph if empty
+  // Fetch initial graph if empty and no document is active/uploaded
   useEffect(() => {
     const fetchInitialGraph = async () => {
       setLoading(true);
@@ -92,10 +104,10 @@ export default function GraphCanvas() {
         setLoading(false);
       }
     };
-    if (nodes.length === 0) {
+    if (nodes.length === 0 && documents.length === 0 && (!activeDocumentId || activeDocumentId === 'doc-1')) {
       fetchInitialGraph();
     }
-  }, [nodes.length, setGraphData]);
+  }, [nodes.length, documents.length, activeDocumentId, setGraphData]);
 
   // Compute degree for each node (number of connections)
   const nodeDegrees = React.useMemo(() => {
@@ -109,6 +121,30 @@ export default function GraphCanvas() {
     });
     return degrees;
   }, [nodes, edges]);
+
+  // Configure forces inside the force-directed simulation
+  useEffect(() => {
+    if (fgRef.current) {
+      const fg = fgRef.current;
+      
+      // Increase many-body charge repulsion force (default is -30) to increase node spacing
+      fg.d3Force('charge').strength(-400);
+      
+      // Increase link distance to give nodes more room
+      fg.d3Force('link').distance(150);
+      
+      // Add collision detection to prevent label/node overlaps
+      fg.d3Force('collide', forceCollide((node: any) => {
+        const degree = nodeDegrees[node.id] || 0;
+        const radius = 3 + Math.sqrt(degree) * 1.5;
+        // Collision buffer based on node radius + padding for labels
+        return radius + 55;
+      }).iterations(3));
+      
+      // Reheat the simulation to apply the layout adjustments immediately
+      fg.d3ReheatSimulation();
+    }
+  }, [nodes, nodeDegrees]);
 
   // Helper to detect if a link is part of the learning path
   const isPathLink = (link: any) => {
@@ -157,12 +193,7 @@ export default function GraphCanvas() {
     }
   };
 
-  // Center on graph when loaded
-  useEffect(() => {
-    if (fgRef.current && nodes.length > 0) {
-      fgRef.current.zoomToFit(400, 50);
-    }
-  }, [nodes.length]);
+  // Initial zoom helper removed; now handled dynamically by onEngineStop
 
   return (
     <div ref={containerRef} className="relative w-full h-full bg-[#030712] select-none">
@@ -250,9 +281,21 @@ export default function GraphCanvas() {
           linkDirectionalParticles={(link: any) => isPathLink(link) ? 4 : 1}
           linkDirectionalParticleSpeed={(link: any) => isPathLink(link) ? 0.015 : 0.005}
           onNodeClick={handleNodeClick}
+          onEngineStop={() => {
+            if (fgRef.current && shouldZoomToFit.current) {
+              fgRef.current.zoomToFit(600, 80);
+              shouldZoomToFit.current = false;
+            }
+          }}
           nodeCanvasObject={(node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-            const label = node.name || node.title || 'Unknown';
-            const fontSize = Math.max(2.5, 9 / globalScale);
+            const rawLabel = node.name || node.title || 'Unknown';
+            
+            // Truncate document names (label is Paper) to 15 characters, others to 20
+            const maxLabelLength = node.label === 'Paper' ? 15 : 20;
+            const label = rawLabel.length > maxLabelLength ? rawLabel.slice(0, maxLabelLength) + '...' : rawLabel;
+            
+            // Fixed font size between 10-14px that scales properly with zoom
+            const fontSize = 12;
             const degree = nodeDegrees[node.id] || 0;
             const radius = 3 + Math.sqrt(degree) * 1.5;
             
