@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useStore, GraphNode } from '../store/useStore';
 import { 
   FileText, Plus, Database, Cpu, HelpCircle, 
-  Map, Sparkles, BookOpen, GraduationCap, 
+  Map as MapIcon, Sparkles, BookOpen, GraduationCap, 
   ArrowRight, Landmark, Tag, ChevronDown, ChevronUp, UserCheck,
   Copy, Check, Bookmark, X, ChevronRight, Send, Trash, Loader2
 } from 'lucide-react';
@@ -237,7 +237,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
               <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"><BookOpen className="w-4 h-4" /> Papers</a>
               <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"><Landmark className="w-4 h-4" /> Authors</a>
               <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"><Tag className="w-4 h-4" /> Keywords</a>
-              <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"><Map className="w-4 h-4" /> Learning Paths</a>
+              <a href="#" className="flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"><MapIcon className="w-4 h-4" /> Learning Paths</a>
             </nav>
 
             {/* Documents Queue */}
@@ -658,7 +658,7 @@ export function RightSidebar() {
             {contextLoading ? (
               <div className="p-3.5 glass-card rounded-xl border border-indigo-500/10 bg-indigo-500/5 space-y-3 animate-pulse">
                 <h4 className="text-[10px] font-bold text-indigo-400 uppercase tracking-wide flex items-center gap-1">
-                  <Map className="w-3.5 h-3.5 text-indigo-400" /> Graph Context Details
+                  <MapIcon className="w-3.5 h-3.5 text-indigo-400" /> Graph Context Details
                 </h4>
                 <div className="space-y-2">
                   <div className="w-24 h-3 bg-slate-800 rounded" />
@@ -682,7 +682,7 @@ export function RightSidebar() {
             ) : contextCard ? (
               <div className="p-3.5 glass-card rounded-xl border border-indigo-500/10 bg-indigo-500/5 space-y-3">
                 <h4 className="text-[10px] font-bold text-indigo-400 uppercase tracking-wide flex items-center gap-1">
-                  <Map className="w-3.5 h-3.5" /> Graph Context Details
+                  <MapIcon className="w-3.5 h-3.5" /> Graph Context Details
                 </h4>
                 
                 {/* Prerequisites */}
@@ -690,7 +690,7 @@ export function RightSidebar() {
                   <span className="text-[9px] font-bold text-slate-500 uppercase">Depends On (Prereqs):</span>
                   {contextCard.prerequisites.length > 0 ? (
                     <div className="flex flex-wrap gap-1 mt-0.5">
-                      {contextCard.prerequisites.map((p: any) => (
+                      {Array.from(new Map(contextCard.prerequisites.map((p: any) => [p.id, p])).values()).map((p: any) => (
                         <span key={p.id} className="text-[9px] font-semibold bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700/50">
                           {p.name}
                         </span>
@@ -706,7 +706,7 @@ export function RightSidebar() {
                   <span className="text-[9px] font-bold text-slate-500 uppercase">Related Links:</span>
                   {contextCard.related.length > 0 ? (
                     <div className="flex flex-wrap gap-1 mt-0.5">
-                      {contextCard.related.map((r: any) => (
+                      {Array.from(new Map(contextCard.related.map((r: any) => [r.id, r])).values()).map((r: any) => (
                         <span key={r.id} className="text-[9px] font-semibold bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700/50">
                           {r.name}
                         </span>
@@ -722,7 +722,7 @@ export function RightSidebar() {
                   <span className="text-[9px] font-bold text-slate-500 uppercase">Related Papers:</span>
                   {contextCard.papers.length > 0 ? (
                     <div className="flex flex-col gap-1 mt-0.5">
-                      {contextCard.papers.map((p: any) => (
+                      {Array.from(new Map(contextCard.papers.map((p: any) => [p.id, p])).values()).map((p: any) => (
                         <span key={p.id} className="text-[9px] font-semibold bg-slate-800/55 text-indigo-300 px-2 py-1 rounded border border-indigo-500/10 truncate">
                           {p.name}
                         </span>
