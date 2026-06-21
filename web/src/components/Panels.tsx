@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useStore, GraphNode } from '../store/useStore';
 import { 
   FileText, Plus, Database, Cpu, HelpCircle, 
   Map, Sparkles, BookOpen, GraduationCap, 
-  ArrowRight, Landmark, Tag, ChevronDown, ChevronUp, UserCheck
+  ArrowRight, Landmark, Tag, ChevronDown, ChevronUp, UserCheck,
+  Copy, Check, Bookmark, X, ChevronRight, Send, Trash, Loader2
 } from 'lucide-react';
 
 // ==================== LEFT SIDEBAR ====================
@@ -25,7 +26,13 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const notes = useStore((state) => state.notes);
   const setNotes = useStore((state) => state.setNotes);
   const addNote = useStore((state) => state.addNote);
-  const [activeNavTab, setActiveNavTab] = useState<'navigation' | 'notes'>('navigation');
+  
+  // Citations state (Sprint 5)
+  const citations = useStore((state) => state.citations);
+  const setCitations = useStore((state) => state.setCitations);
+  const [copiedCitationId, setCopiedCitationId] = useState<string | null>(null);
+
+  const [activeNavTab, setActiveNavTab] = useState<'navigation' | 'notes' | 'citations'>('navigation');
   const [noteSearch, setNoteSearch] = useState('');
   const [noteInput, setNoteInput] = useState('');
   const [noteSubmitLoading, setNoteSubmitLoading] = useState(false);
@@ -45,6 +52,22 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
     };
     fetchNotes();
   }, [setNotes]);
+
+  // Fetch citations on load
+  useEffect(() => {
+    const fetchCitations = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/citations');
+        if (response.ok) {
+          const data = await response.json();
+          setCitations(data);
+        }
+      } catch (err) {
+        console.error('Failed to load citations', err);
+      }
+    };
+    fetchCitations();
+  }, [setCitations]);
 
   const handleDocumentSelect = async (docId: string) => {
     setActiveDocumentId(docId);
@@ -150,11 +173,21 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
         >
           Notes ({notes.length})
         </button>
+        <button
+          onClick={() => setActiveNavTab('citations')}
+          className={`flex-1 py-1.5 text-[10px] font-extrabold rounded-lg uppercase tracking-wider transition-colors ${
+            activeNavTab === 'citations'
+              ? 'bg-slate-800 text-slate-100 border border-slate-700/60'
+              : 'text-slate-500 hover:text-slate-300'
+          }`}
+        >
+          Citations ({citations.length})
+        </button>
       </div>
 
       {/* Main navigation area */}
       <div className="flex-1 overflow-y-auto min-h-0">
-        {activeNavTab === 'navigation' ? (
+        {activeNavTab === 'navigation' && (
           <div className="p-2.5 space-y-4">
             {/* Ingest Actions */}
             <div>
@@ -212,7 +245,9 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
               )}
             </div>
           </div>
-        ) : (
+        )}
+
+        {activeNavTab === 'notes' && (
           /* Notes Composer & List (Sprint 4) */
           <div className="p-3 space-y-4">
             {/* Notes Search */}
@@ -265,23 +300,73 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
             </div>
           </div>
         )}
+
+        {activeNavTab === 'citations' && (
+          /* Citations Library (Sprint 5) */
+          <div className="p-3 space-y-4">
+            <div className="space-y-2.5">
+              <div className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Saved Citations</div>
+              {citations.length === 0 ? (
+                <div className="text-center py-6 text-[10px] text-slate-500 border border-dashed border-slate-800 rounded-lg font-medium">
+                  No citations saved yet. Select a Paper node to format and save a citation.
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {citations.map((cit) => (
+                    <div key={cit.id} className="p-3 rounded-lg bg-slate-900/55 border border-slate-800/70 space-y-2 relative group hover:border-slate-700/60 transition-colors">
+                      <div className="flex items-center justify-between">
+                        <span className="bg-indigo-500/10 text-indigo-300 border border-indigo-500/10 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider">
+                          {cit.style}
+                        </span>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(cit.formatted_text);
+                            setCopiedCitationId(cit.id);
+                            setTimeout(() => setCopiedCitationId(null), 2000);
+                          }}
+                          className="text-[9px] font-bold text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1"
+                        >
+                          {copiedCitationId === cit.id ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-400" />
+                              <span className="text-emerald-400">Copied</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3" />
+                              <span>Copy</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wide truncate max-w-[200px]">
+                        {cit.paper_title || 'Research Paper'}
+                      </p>
+                      <p className="text-[11px] text-slate-300 font-medium leading-relaxed bg-slate-950/30 p-2 rounded border border-slate-950/50">
+                        {cit.formatted_text}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Footer Support Info */}
       <div className="p-4 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-500 font-medium">
         <span className="flex items-center gap-1.5"><HelpCircle className="w-3.5 h-3.5" /> Docs</span>
-        <span>Sprint 4 Live</span>
+        <span>Sprint 5 Live</span>
       </div>
     </aside>
   );
 }
 
 // ==================== RIGHT SIDEBAR ====================
-import { useEffect, useRef } from 'react';
-import { Send, Trash } from 'lucide-react';
-
 export function RightSidebar() {
   const selectedNode = useStore((state) => state.selectedNode);
+  const setSelectedNode = useStore((state) => state.setSelectedNode);
   const user = useStore((state) => state.user);
   
   // Chat state
@@ -292,11 +377,85 @@ export function RightSidebar() {
   const setChatLoading = useStore((state) => state.setChatLoading);
   const clearChat = useStore((state) => state.clearChat);
 
+  // Citations & Paths state (Sprint 5)
+  const addCitation = useStore((state) => state.addCitation);
+  const activePathNodeIds = useStore((state) => state.activePathNodeIds);
+  const setActivePathNodeIds = useStore((state) => state.setActivePathNodeIds);
+  const learningPathNarration = useStore((state) => state.learningPathNarration);
+  const setLearningPathNarration = useStore((state) => state.setLearningPathNarration);
+  const appendGraphData = useStore((state) => state.appendGraphData);
+  const globalNodes = useStore((state) => state.nodes);
+
   // Local state
   const [contextCard, setContextCard] = useState<any>(null);
   const [contextLoading, setContextLoading] = useState(false);
   const [inputValue, setInputValue] = useState('');
+  const [selectedStyle, setSelectedStyle] = useState('APA');
+  const [citationSaving, setCitationSaving] = useState(false);
+  const [pathGenerating, setPathGenerating] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Calculate learning path steps mapping
+  const pathSteps = activePathNodeIds.map(id => globalNodes.find(n => n.id === id)).filter(Boolean);
+
+  const handleSaveCitation = async () => {
+    if (!selectedNode || selectedNode.label !== 'Paper') return;
+    setCitationSaving(true);
+    try {
+      const response = await fetch('http://localhost:8000/citations', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          paper_id: selectedNode.id,
+          style: selectedStyle,
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        addCitation(data);
+      }
+    } catch (err) {
+      console.error('Failed to save citation', err);
+    } finally {
+      setCitationSaving(false);
+    }
+  };
+
+  const handleGenerateLearningPath = async () => {
+    if (!selectedNode || selectedNode.label !== 'Concept') return;
+    setPathGenerating(true);
+    try {
+      const response = await fetch(`http://localhost:8000/learning-path?target=${selectedNode.id}`);
+      if (response.ok) {
+        const data = await response.json();
+        appendGraphData({ nodes: data.nodes, edges: data.edges });
+        setActivePathNodeIds(data.nodes.map((n: any) => n.id));
+        setLearningPathNarration(data.narration);
+      }
+    } catch (err) {
+      console.error('Failed to generate learning path', err);
+    } finally {
+      setPathGenerating(false);
+    }
+  };
+
+  const handleClearPath = () => {
+    setActivePathNodeIds([]);
+    setLearningPathNarration(null);
+  };
+
+  const handleStepClick = (stepNode: any) => {
+    const clickedNode: GraphNode = {
+      id: stepNode.id,
+      label: stepNode.label || 'Concept',
+      name: stepNode.name || stepNode.title || 'Unknown',
+      description: stepNode.description || '',
+      difficulty_level: stepNode.difficulty_level || 'Beginner'
+    };
+    setSelectedNode(clickedNode);
+  };
 
   // Auto-scroll chat to bottom
   useEffect(() => {
@@ -499,29 +658,179 @@ export function RightSidebar() {
               </div>
             )}
 
+            {/* Citation Formatter (Sprint 5) */}
+            {selectedNode.label === 'Paper' && (
+              <div className="p-3.5 glass-card rounded-xl border border-indigo-500/10 bg-indigo-500/5 space-y-3">
+                <h4 className="text-[10px] font-bold text-indigo-400 uppercase tracking-wide flex items-center gap-1.5">
+                  <Bookmark className="w-3.5 h-3.5 text-indigo-400" /> Citation Formatter
+                </h4>
+                <div className="flex gap-2 items-center">
+                  <div className="relative flex-1">
+                    <select
+                      value={selectedStyle}
+                      onChange={(e) => setSelectedStyle(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-semibold text-slate-300 focus:outline-none focus:border-indigo-500/50 appearance-none cursor-pointer"
+                    >
+                      <option value="APA">APA Style</option>
+                      <option value="MLA">MLA Style</option>
+                      <option value="IEEE">IEEE Style</option>
+                    </select>
+                    <ChevronDown className="w-3.5 h-3.5 text-slate-500 absolute right-2.5 top-2 pointer-events-none" />
+                  </div>
+                  <button
+                    disabled={citationSaving}
+                    onClick={handleSaveCitation}
+                    className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:bg-slate-850 text-white rounded-lg font-bold text-[10px] uppercase tracking-wider transition-all duration-150 shadow-md flex-shrink-0"
+                  >
+                    {citationSaving ? 'Saving...' : 'Save'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Generate Learning Path (Sprint 5) */}
+            {selectedNode.label === 'Concept' && (
+              <button
+                disabled={pathGenerating}
+                onClick={handleGenerateLearningPath}
+                className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 disabled:bg-slate-850 text-white rounded-xl font-bold text-[10px] uppercase tracking-wider flex items-center justify-center gap-2 shadow-md transition-colors"
+              >
+                {pathGenerating ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                    <span>Calculating Path...</span>
+                  </>
+                ) : (
+                  <>
+                    <GraduationCap className="w-3.5 h-3.5 text-white" />
+                    <span>Generate Learning Path</span>
+                  </>
+                )}
+              </button>
+            )}
+
+            {/* AI Study Guide (Sprint 5) */}
+            {learningPathNarration && (
+              <div className="p-3.5 glass-card rounded-xl border border-emerald-500/20 bg-emerald-950/10 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-[10px] font-extrabold text-emerald-400 uppercase tracking-widest flex items-center gap-1.5">
+                    <GraduationCap className="w-3.5 h-3.5 text-emerald-400" /> AI Study Guide
+                  </h4>
+                  <button
+                    onClick={handleClearPath}
+                    className="p-1 rounded text-slate-500 hover:text-slate-300 hover:bg-white/5 transition-colors"
+                    title="Clear Learning Path"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+                
+                <p className="text-[11px] text-slate-300 leading-relaxed font-semibold">
+                  {learningPathNarration}
+                </p>
+                
+                {/* Steps list */}
+                <div className="space-y-1.5">
+                  <span className="text-[9px] font-bold text-slate-500 uppercase">Path Steps:</span>
+                  <div className="flex flex-col gap-1.5">
+                    {pathSteps.map((stepNode: any, idx: number) => {
+                      const isSelected = selectedNode?.id === stepNode.id;
+                      return (
+                        <button
+                          key={stepNode.id}
+                          onClick={() => handleStepClick(stepNode)}
+                          className={`w-full text-left px-2.5 py-1.5 rounded-lg border flex items-center justify-between text-[10px] font-bold transition-all ${
+                            isSelected
+                              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                              : 'bg-slate-950/40 border-slate-900 text-slate-400 hover:text-slate-200 hover:border-slate-800'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="w-4 h-4 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-[8px] font-bold text-slate-500">
+                              {idx + 1}
+                            </span>
+                            <span className="truncate">{stepNode.name || stepNode.title}</span>
+                          </div>
+                          <ChevronRight className="w-3 h-3 text-slate-600" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Quick Actions (Sprint 3) */}
-            <div className="grid grid-cols-2 gap-2 mt-4">
-              <button
-                onClick={() => triggerQuickAction('explain')}
-                className="py-2 px-2.5 bg-slate-900 border border-slate-800 hover:border-indigo-500/40 text-slate-300 text-[10px] font-bold rounded-lg transition-all"
-              >
-                Explain Concept
-              </button>
-              <button
-                onClick={() => triggerQuickAction('compare')}
-                className="py-2 px-2.5 bg-slate-900 border border-slate-800 hover:border-indigo-500/40 text-slate-300 text-[10px] font-bold rounded-lg transition-all"
-              >
-                Prereqs Compare
-              </button>
-            </div>
+            {selectedNode.label === 'Concept' && (
+              <div className="grid grid-cols-2 gap-2 mt-4">
+                <button
+                  onClick={() => triggerQuickAction('explain')}
+                  className="py-2 px-2.5 bg-slate-900 border border-slate-800 hover:border-indigo-500/40 text-slate-300 text-[10px] font-bold rounded-lg transition-all"
+                >
+                  Explain Concept
+                </button>
+                <button
+                  onClick={() => triggerQuickAction('compare')}
+                  className="py-2 px-2.5 bg-slate-900 border border-slate-800 hover:border-indigo-500/40 text-slate-300 text-[10px] font-bold rounded-lg transition-all"
+                >
+                  Prereqs Compare
+                </button>
+              </div>
+            )}
           </div>
         ) : (
-          <div className="h-44 flex flex-col items-center justify-center text-center text-slate-500 border border-dashed border-slate-800 rounded-xl py-6 px-4 bg-slate-900/10">
-            <Cpu className="w-8 h-8 text-slate-600 mb-2 animate-pulse" />
-            <p className="text-xs font-semibold">Select a Node on the Graph</p>
-            <p className="text-[10px] text-slate-500 mt-1 max-w-[200px]">
-              Click any element on the map to display its definition, properties, and relationships.
-            </p>
+          <div className="space-y-4">
+            {/* AI Study Guide (Sprint 5) - Even if no node is selected */}
+            {learningPathNarration && (
+              <div className="p-3.5 glass-card rounded-xl border border-emerald-500/20 bg-emerald-950/10 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-[10px] font-extrabold text-emerald-400 uppercase tracking-widest flex items-center gap-1.5">
+                    <GraduationCap className="w-3.5 h-3.5 text-emerald-400" /> AI Study Guide
+                  </h4>
+                  <button
+                    onClick={handleClearPath}
+                    className="p-1 rounded text-slate-500 hover:text-slate-300 hover:bg-white/5 transition-colors"
+                    title="Clear Learning Path"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+                
+                <p className="text-[11px] text-slate-300 leading-relaxed font-semibold">
+                  {learningPathNarration}
+                </p>
+                
+                {/* Steps list */}
+                <div className="space-y-1.5">
+                  <span className="text-[9px] font-bold text-slate-500 uppercase">Path Steps:</span>
+                  <div className="flex flex-col gap-1.5">
+                    {pathSteps.map((stepNode: any, idx: number) => (
+                      <button
+                        key={stepNode.id}
+                        onClick={() => handleStepClick(stepNode)}
+                        className="w-full text-left px-2.5 py-1.5 rounded-lg border flex items-center justify-between text-[10px] font-bold transition-all bg-slate-950/40 border-slate-900 text-slate-400 hover:text-slate-200 hover:border-slate-800"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="w-4 h-4 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-[8px] font-bold text-slate-500">
+                            {idx + 1}
+                          </span>
+                          <span className="truncate">{stepNode.name || stepNode.title}</span>
+                        </div>
+                        <ChevronRight className="w-3 h-3 text-slate-600" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="h-44 flex flex-col items-center justify-center text-center text-slate-500 border border-dashed border-slate-800 rounded-xl py-6 px-4 bg-slate-900/10">
+              <Cpu className="w-8 h-8 text-slate-600 mb-2 animate-pulse" />
+              <p className="text-xs font-semibold">Select a Node on the Graph</p>
+              <p className="text-[10px] text-slate-500 mt-1 max-w-[200px]">
+                Click any element on the map to display its definition, properties, and relationships.
+              </p>
+            </div>
           </div>
         )}
 

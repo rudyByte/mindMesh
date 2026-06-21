@@ -84,6 +84,15 @@ interface AppState {
   highlights: HighlightInfo[];
   setHighlights: (highlights: HighlightInfo[]) => void;
   addHighlight: (highlight: HighlightInfo) => void;
+
+  // Citations & Learning Paths (Sprint 5)
+  citations: CitationInfo[];
+  setCitations: (citations: CitationInfo[]) => void;
+  addCitation: (citation: CitationInfo) => void;
+  activePathNodeIds: string[];
+  setActivePathNodeIds: (ids: string[]) => void;
+  learningPathNarration: string | null;
+  setLearningPathNarration: (narration: string | null) => void;
 }
 
 export interface NoteInfo {
@@ -98,6 +107,13 @@ export interface HighlightInfo {
   text: string;
   page: number;
   doc_title: string;
+}
+
+export interface CitationInfo {
+  id: string;
+  formatted_text: string;
+  style: string;
+  paper_title: string;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -183,4 +199,13 @@ export const useStore = create<AppState>((set) => ({
   highlights: [],
   setHighlights: (highlights) => set({ highlights }),
   addHighlight: (highlight) => set((state) => ({ highlights: [highlight, ...state.highlights] })),
+
+  // Citations & Learning Paths states (Sprint 5)
+  citations: [],
+  setCitations: (citations) => set({ citations }),
+  addCitation: (citation) => set((state) => ({ citations: [citation, ...state.citations] })),
+  activePathNodeIds: [],
+  setActivePathNodeIds: (ids) => set({ activePathNodeIds: ids }),
+  learningPathNarration: null,
+  setLearningPathNarration: (narration) => set({ learningPathNarration: narration }),
 }));

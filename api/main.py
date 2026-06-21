@@ -2,7 +2,7 @@ import os
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.routers import health, documents, graph, copilot, highlights, notes
+from api.routers import health, documents, graph, copilot, highlights, notes, citations, paths
 from api.utils.neo4j_client import neo4j_client
 
 logging.basicConfig(level=logging.INFO)
@@ -26,6 +26,8 @@ app.include_router(graph.router, tags=["Graph"])
 app.include_router(copilot.router, tags=["Copilot"])
 app.include_router(highlights.router, tags=["Highlights"])
 app.include_router(notes.router, tags=["Notes"])
+app.include_router(citations.router, tags=["Citations"])
+app.include_router(paths.router, tags=["Paths"])
 
 @app.on_event("startup")
 def startup_event():

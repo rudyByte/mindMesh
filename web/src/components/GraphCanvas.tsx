@@ -33,6 +33,7 @@ export default function GraphCanvas() {
   const setGraphMode = useStore((state) => state.setGraphMode);
   const setGraphData = useStore((state) => state.setGraphData);
   const appendGraphData = useStore((state) => state.appendGraphData);
+  const activePathNodeIds = useStore((state) => state.activePathNodeIds);
 
   // Track dimensions
   useEffect(() => {
@@ -82,6 +83,16 @@ export default function GraphCanvas() {
     });
     return degrees;
   }, [nodes, edges]);
+
+  // Helper to detect if a link is part of the learning path
+  const isPathLink = (link: any) => {
+    if (!activePathNodeIds || activePathNodeIds.length < 2) return false;
+    const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+    const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+    const sIdx = activePathNodeIds.indexOf(sourceId);
+    const tIdx = activePathNodeIds.indexOf(targetId);
+    return sIdx !== -1 && tIdx !== -1 && tIdx === sIdx + 1;
+  };
 
   // Color mapping based on label
   const getNodeColor = (label: string) => {
@@ -206,11 +217,12 @@ export default function GraphCanvas() {
             return 3 + Math.sqrt(deg) * 2;
           }}
           nodeColor={(node: any) => getNodeColor(node.label)}
-          linkColor={() => 'rgba(255, 255, 255, 0.08)'}
+          linkColor={(link: any) => isPathLink(link) ? '#10b981' : 'rgba(255, 255, 255, 0.08)'}
+          linkWidth={(link: any) => isPathLink(link) ? 2.5 : 1}
           linkDirectionalArrowLength={3.5}
           linkDirectionalArrowRelPos={1}
-          linkDirectionalParticles={1}
-          linkDirectionalParticleSpeed={0.005}
+          linkDirectionalParticles={(link: any) => isPathLink(link) ? 4 : 1}
+          linkDirectionalParticleSpeed={(link: any) => isPathLink(link) ? 0.015 : 0.005}
           onNodeClick={handleNodeClick}
           nodeCanvasObject={(node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
             const label = node.name || node.title || 'Unknown';
@@ -218,16 +230,32 @@ export default function GraphCanvas() {
             const degree = nodeDegrees[node.id] || 0;
             const radius = 3 + Math.sqrt(degree) * 1.5;
             
-            // Draw outer glow if selected
-            const isSelected = selectedNode?.id === node.id;
-            if (isSelected) {
+            // Draw outer glow if part of active learning path
+            const isPathNode = activePathNodeIds && activePathNodeIds.includes(node.id);
+            if (isPathNode) {
+              const pathIdx = activePathNodeIds.indexOf(node.id);
+              const time = Date.now() / 1000;
+              const pulseFactor = 0.5 + 0.5 * Math.sin(time * 5 - pathIdx * 0.8);
+              
               ctx.beginPath();
-              ctx.arc(node.x, node.y, radius + 2, 0, 2 * Math.PI, false);
-              ctx.fillStyle = 'rgba(99, 102, 241, 0.25)';
+              ctx.arc(node.x, node.y, radius + 3 + pulseFactor * 2.5, 0, 2 * Math.PI, false);
+              ctx.fillStyle = `rgba(16, 185, 129, ${0.15 + pulseFactor * 0.25})`;
               ctx.fill();
-              ctx.strokeStyle = '#818cf8';
-              ctx.lineWidth = 1 / globalScale;
+              ctx.strokeStyle = '#10b981';
+              ctx.lineWidth = (1.5 + pulseFactor * 1.5) / globalScale;
               ctx.stroke();
+            } else {
+              // Draw regular outer glow if selected
+              const isSelected = selectedNode?.id === node.id;
+              if (isSelected) {
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, radius + 2, 0, 2 * Math.PI, false);
+                ctx.fillStyle = 'rgba(99, 102, 241, 0.25)';
+                ctx.fill();
+                ctx.strokeStyle = '#818cf8';
+                ctx.lineWidth = 1 / globalScale;
+                ctx.stroke();
+              }
             }
 
             // Draw node circle
@@ -257,7 +285,8 @@ export default function GraphCanvas() {
             );
 
             // Draw text
-            ctx.fillStyle = isSelected ? '#ffffff' : '#cbd5e1';
+            const isSelected = selectedNode?.id === node.id;
+            ctx.fillStyle = isSelected || isPathNode ? '#ffffff' : '#cbd5e1';
             ctx.fillText(label, node.x, node.y + radius + 2);
           }}
         />

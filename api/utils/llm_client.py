@@ -117,4 +117,46 @@ class LLMClient:
 
         return {"nodes": nodes, "relationships": relationships}
 
+    def narrate_learning_path(self, concepts: list) -> str:
+        if self._is_mock:
+            return self._run_mock_narration(concepts)
+        
+        concepts_str = " -> ".join([c for c in concepts])
+        system_prompt = (
+            "You are an encouraging academic AI tutor. Your task is to turn an ordered list of concepts "
+            "representing a learning prerequisite path into a friendly, clear, step-by-step study plan. "
+            "Write one short, helpful sentence per concept, explaining why it comes in this order and how "
+            "it builds toward the final target concept. Keep the total response concise, direct, and under "
+            "150 words in total."
+        )
+        try:
+            message = self._client.messages.create(
+                model=config.ANTHROPIC_MODEL,
+                max_tokens=1000,
+                temperature=0.5,
+                system=system_prompt,
+                messages=[
+                    {"role": "user", "content": f"Please narrate this learning path: {concepts_str}"}
+                ]
+            )
+            return message.content[0].text.strip()
+        except Exception as e:
+            logger.error(f"Error during path narration: {e}")
+            return self._run_mock_narration(concepts)
+
+    def _run_mock_narration(self, concepts: list) -> str:
+        if not concepts:
+            return "No prerequisite concepts found. You are ready to start with the target concept directly!"
+        
+        narration_steps = []
+        for i, c in enumerate(concepts):
+            if i == 0:
+                narration_steps.append(f"First, build a solid foundation with **{c}**.")
+            elif i == len(concepts) - 1:
+                narration_steps.append(f"Finally, synthesize these tools to master the target concept **{c}**.")
+            else:
+                narration_steps.append(f"Next, transition into **{c}** to expand your understanding of relevant concepts.")
+        
+        return " ".join(narration_steps)
+
 llm_client = LLMClient()
