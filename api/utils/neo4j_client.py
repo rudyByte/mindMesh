@@ -19,6 +19,7 @@ class Neo4jClient:
             if "localhost" in config.NEO4J_URI and config.NEO4J_PASSWORD == "password":
                 logger.warning("Default localhost credentials detected. Starting in mock mode.")
                 self._is_mock = True
+                self._seed_mock_data()
                 return
 
             self._driver = GraphDatabase.driver(
@@ -182,6 +183,22 @@ class Neo4jClient:
         if "RETURN 1" in query_upper:
             return [{"1": 1}]
 
+        # 1. Update/SET queries (e.g. status updates)
+        if "SET " in query_upper and "MERGE" not in query_upper:
+            doc_id = params.get("doc_id") or params.get("id")
+            if doc_id and doc_id in self.mock_nodes:
+                for k, v in params.items():
+                    if k not in ["doc_id", "id"]:
+                        self.mock_nodes[doc_id][k] = v
+                if "STATUS = 'DONE'" in query_upper:
+                    self.mock_nodes[doc_id]["status"] = "done"
+                    self.mock_nodes[doc_id]["progress_pct"] = 100
+                elif "STATUS = 'ERROR'" in query_upper:
+                    self.mock_nodes[doc_id]["status"] = "error"
+                return [{"d": self.mock_nodes[doc_id]}]
+            return []
+
+        # 2. Document insertion
         if "MERGE (D:DOCUMENT" in query_upper:
             doc_id = params.get("id", "doc-1")
             self.mock_nodes[doc_id] = {
@@ -189,25 +206,31 @@ class Neo4jClient:
                 "label": "Document",
                 "title": params.get("title", "Document"),
                 "type": params.get("type", "pdf"),
+                "status": "processing",
+                "progress_pct": 10,
                 "upload_date": params.get("upload_date"),
                 "storage_url": params.get("storage_url")
             }
             return [{"d": self.mock_nodes[doc_id]}]
 
-        if "MERGE" in query_upper or "CREATE" in query_upper:
-            # We dynamically intercept inserts from Sprint 1 Graph Extraction
-            # E.g. MERGE (n:Concept {name: $name}) ...
+        # 3. Concept / Paper / Author / Note / Highlight / Citation insertion
+        if ("MERGE" in query_upper or "CREATE" in query_upper) and "->" not in query_upper:
             label = "Concept"
             if ":PAPER" in query_upper:
                 label = "Paper"
             elif ":AUTHOR" in query_upper:
                 label = "Author"
+            elif ":NOTE" in query_upper:
+                label = "Note"
+            elif ":HIGHLIGHT" in query_upper:
+                label = "Highlight"
+            elif ":CITATION" in query_upper:
+                label = "Citation"
             
-            # Simple simulation of adding node
             name = params.get("name") or params.get("title") or "Node"
             node_id = params.get("id") or f"mock-n-{len(self.mock_nodes) + 1}"
             
-            self.mock_nodes[node_id] = {
+            node_data = {
                 "id": node_id,
                 "label": label,
                 "name": name,
@@ -215,29 +238,62 @@ class Neo4jClient:
                 "description": params.get("description", ""),
                 "difficulty_level": params.get("difficulty_level", "Beginner")
             }
-            return [{"n": self.mock_nodes[node_id]}]
+            # Copy all additional fields from params to mock data
+            for k, v in params.items():
+                if k not in node_data:
+                    node_data[k] = v
+                    
+            self.mock_nodes[node_id] = node_data
+            return [{"node_id": node_id, "n": self.mock_nodes[node_id]}]
 
-        # Retrieve nodes/edges matching conditions
+        # 3.1 Relationship insertion
+        if "MERGE" in query_upper and "->" in query_upper:
+            if "CONTAINS" in query_upper:
+                doc_id = params.get("doc_id")
+                node_id = params.get("node_id")
+                if doc_id and node_id:
+                    self.mock_edges.append({
+                        "from": doc_id,
+                        "to": node_id,
+                        "type": "CONTAINS"
+                    })
+            return []
+
+        # 4. MATCH/Retrieve queries
         if "MATCH" in query_upper:
-            if "PREREQUISITE_OF" in query_upper or "RELATED_TO" in query_upper or "EXTENDS" in query_upper:
-                # Return paths for SPRINT 2 expand
-                result = []
-                target_id = params.get("id")
+            # Check if it's querying a Document by ID (for text/status)
+            if "DOCUMENT" in query_upper and ("ID" in query_upper or "DOC_ID" in query_upper) and "CONTAINS" not in query_upper:
+                doc_id = params.get("id") or params.get("doc_id")
+                if doc_id and doc_id in self.mock_nodes:
+                    doc = self.mock_nodes[doc_id]
+                    return [{
+                        "status": doc.get("status", "done"),
+                        "progress_pct": doc.get("progress_pct", 100),
+                        "error_msg": doc.get("error_msg"),
+                        "title": doc.get("title", "Document"),
+                        "storage_url": doc.get("storage_url", "")
+                    }]
+                return []
+
+            # Check if it's querying for a list of concepts (for concept-linking)
+            if "CONCEPT" in query_upper and "RETURN" in query_upper and "CONTAINS" not in query_upper:
+                return [{"id": node["id"], "name": node["name"]} for node in self.mock_nodes.values() if node.get("label") == "Concept"]
+
+            # Expand graph paths (Sprint 2 expand / traverse)
+            if "PREREQUISITE_OF" in query_upper or "RELATED_TO" in query_upper or "EXTENDS" in query_upper or "PATH" in query_upper:
+                target_id = params.get("id") or params.get("node_id")
                 depth = params.get("depth", 1)
+                mode = params.get("mode", "basic")
                 
-                # Simple BFS/DFS in memory for Mock paths
-                visited = set()
-                queue = [(target_id, 0)]
                 nodes_to_return = {}
                 edges_to_return = []
                 
                 if target_id in self.mock_nodes:
                     nodes_to_return[target_id] = self.mock_nodes[target_id]
                 
-                # Gather links up to depth
                 for edge in self.mock_edges:
-                    # Basic direction expansion
-                    # Incoming for Prereq (Basic), Outgoing or Undirected for Advanced
+                    if mode == "basic" and edge["type"] != "PREREQUISITE_OF":
+                        continue
                     if edge["from"] == target_id or edge["to"] == target_id:
                         from_node = self.mock_nodes.get(edge["from"])
                         to_node = self.mock_nodes.get(edge["to"])
@@ -248,14 +304,30 @@ class Neo4jClient:
 
                 return [{"nodes": list(nodes_to_return.values()), "edges": edges_to_return}]
 
+            # Document Contains subgraph
             if "DOCUMENT" in query_upper and "CONTAINS" in query_upper:
-                # Return document-specific subgraph
-                doc_id = params.get("id")
-                # Return all mock nodes as part of the document
                 return [{"nodes": list(self.mock_nodes.values()), "edges": self.mock_edges}]
             
+            # Fetch single node details by ID
+            if "ID" in query_upper and "DOCUMENT" not in query_upper:
+                node_id = params.get("id") or params.get("node_id")
+                if node_id and node_id in self.mock_nodes:
+                    n = self.mock_nodes[node_id]
+                    name = n.get("name") or n.get("title") or "Unknown"
+                    return [{
+                        "label": n.get("label", "Concept"),
+                        "id": n.get("id"),
+                        "name": name,
+                        "description": n.get("description", ""),
+                        "difficulty_level": n.get("difficulty_level", "Beginner"),
+                        "title": n.get("title"),
+                        "year": n.get("year"),
+                        "doi": n.get("doi")
+                    }]
+                return []
+
+            # List all nodes fallback
             if "MATCH (N) RETURN" in query_upper or "MATCH (N:CONCEPT)" in query_upper:
-                # List all nodes
                 return [{"n": node} for node in self.mock_nodes.values()]
 
         return []

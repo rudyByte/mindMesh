@@ -18,7 +18,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
   
   const addDocument = useStore((state) => state.addDocument);
   const updateDocumentStatus = useStore((state) => state.updateDocumentStatus);
-  const appendGraphData = useStore((state) => state.appendGraphData);
+  const setGraphData = useStore((state) => state.setGraphData);
   const setActiveDocumentId = useStore((state) => state.setActiveDocumentId);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -61,6 +61,9 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
       setErrorMsg('Only PDF files are supported.');
       return;
     }
+
+    // Clear old graph data and document queue before starting ingestion
+    useStore.setState({ nodes: [], edges: [], documents: [] });
 
     setFileName(file.name);
     setUploadState('uploading');
@@ -131,7 +134,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
           const graphResponse = await fetch(`http://localhost:8000/documents/${docId}/graph`);
           if (graphResponse.ok) {
             const graphData = await graphResponse.json();
-            appendGraphData(graphData);
+            setGraphData(graphData);
           }
         } else if (status === 'error') {
           setUploadState('error');

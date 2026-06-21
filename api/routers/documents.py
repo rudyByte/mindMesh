@@ -25,7 +25,7 @@ class UploadResponse(BaseModel):
 class StatusResponse(BaseModel):
     status: str
     progress_pct: int
-    error: str = None
+    error: str | None = None
 
 def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
     extraction_status_cache[doc_id] = {"status": "processing", "progress_pct": 10, "error": None}
@@ -202,6 +202,13 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
         raise HTTPException(status_code=400, detail="Only PDF documents are supported.")
         
     try:
+        # Clear old graph data (Neo4j and mock data) before starting ingestion
+        if neo4j_client.is_mock():
+            neo4j_client.mock_nodes.clear()
+            neo4j_client.mock_edges.clear()
+        else:
+            neo4j_client.run_query("MATCH (n) DETACH DELETE n")
+
         # Read file bytes
         file_bytes = await file.read()
         
@@ -262,10 +269,30 @@ def get_document_status(id: str):
 @router.get("/documents/{id}/graph")
 def get_document_graph(id: str):
     if neo4j_client.is_mock():
-        # In mock mode, return the full mock graph elements
-        nodes = list(neo4j_client.mock_nodes.values())
-        edges = neo4j_client.mock_edges
-        return {"nodes": nodes, "edges": edges}
+        # Find all mock nodes containing relationships with this document ID
+        doc_node_ids = set()
+        for edge in neo4j_client.mock_edges:
+            if edge["from"] == id and edge["type"] == "CONTAINS":
+                doc_node_ids.add(edge["to"])
+        
+        # If the document is the initial placeholder "doc-1" and has no CONTAINS relationships,
+        # fallback to returning all pre-seeded ML concepts (excluding the Document node itself)
+        if not doc_node_ids and id == "doc-1":
+            ml_nodes = [n for n in neo4j_client.mock_nodes.values() if n.get("label") != "Document"]
+            ml_node_ids = {n["id"] for n in ml_nodes}
+            ml_edges = [
+                e for e in neo4j_client.mock_edges 
+                if e["type"] != "CONTAINS" and e["from"] in ml_node_ids and e["to"] in ml_node_ids
+            ]
+            return {"nodes": ml_nodes, "edges": ml_edges}
+            
+        # Return only the nodes and edges for this specific document
+        doc_nodes = [n for nid, n in neo4j_client.mock_nodes.items() if nid in doc_node_ids]
+        doc_edges = [
+            e for e in neo4j_client.mock_edges 
+            if e["type"] != "CONTAINS" and e["from"] in doc_node_ids and e["to"] in doc_node_ids
+        ]
+        return {"nodes": doc_nodes, "edges": doc_edges}
         
     # Fetch nodes in the document
     nodes_query = """
@@ -322,19 +349,39 @@ def get_document_text(id: str):
         return {"text": text}
     except Exception as e:
         logger.warning(f"Failed to fetch real PDF bytes: {e}. Returning simulated textbook text.")
-        mock_text = (
-            "Chapter 1: Neural Networks and Deep Learning\n\n"
-            "Artificial Neural Networks are computational models inspired by biological neural architectures. "
-            "They consist of interconnected neurons arranged in layers: Input layer, Hidden layers, and Output layer. "
-            "In modern machine learning, Linear Algebra plays a vital role. Vector dot products map inputs to activations, "
-            "while matrices represent weights of the synapses.\n\n"
-            "Section 1.2: Optimization and Gradient Descent\n"
-            "To train a neural network, we must minimize its error, quantified by a Loss Function. "
-            "Gradient Descent is the optimization algorithm used to iteratively compute gradients of this loss function. "
-            "By updating parameters in the reverse direction of the gradient, the model converges to a local minimum.\n\n"
-            "Section 1.3: Self-Attention and Transformers\n"
-            "Self-attention denotes the mechanism where a model scales relationships within a single sequence. "
-            "Transformers, introduced in 'Attention Is All You Need', leverage self-attention to parse language contexts. "
-            "They have revolutionized modern Artificial Intelligence and Natural Language Processing."
-        )
+        doc_title = res[0].get("title", "").lower() if res else ""
+        if any(k in doc_title for k in ["iot", "internet of things", "edge", "fog", "5g", "iomt", "iiot", "smart"]):
+            mock_text = (
+                "Chapter 1: Introduction to Internet of Things (IoT)\n\n"
+                "The Internet of Things (IoT) refers to a network of physical devices, vehicles, home appliances, "
+                "and other items embedded with electronics, software, sensors, actuators, and connectivity. "
+                "Edge Computing plays a vital role in IoT systems by bringing computation and data storage closer "
+                "to the devices where it is gathered, rather than relying on a central cloud.\n\n"
+                "Section 1.2: Fog Computing and 5G\n"
+                "Fog Computing extends cloud computing and services to the edge of an enterprise's network. "
+                "It distributes computation, communication, and storage resources closer to the devices. "
+                "The integration of 5G for IoT provides the high speed, low latency, and massive device connectivity "
+                "needed for real-time applications.\n\n"
+                "Section 1.3: Smart Cities and IoT Challenges\n"
+                "Smart Cities leverage IoT devices and sensors to optimize urban services and infrastructure, "
+                "improving efficiency and quality of life. However, deploying IoT at scale introduces significant "
+                "IoT Challenges, including security vulnerabilities, privacy concerns, interoperability issues, "
+                "and massive power consumption requirements."
+            )
+        else:
+            mock_text = (
+                "Chapter 1: Neural Networks and Deep Learning\n\n"
+                "Artificial Neural Networks are computational models inspired by biological neural architectures. "
+                "They consist of interconnected neurons arranged in layers: Input layer, Hidden layers, and Output layer. "
+                "In modern machine learning, Linear Algebra plays a vital role. Vector dot products map inputs to activations, "
+                "while matrices represent weights of the synapses.\n\n"
+                "Section 1.2: Optimization and Gradient Descent\n"
+                "To train a neural network, we must minimize its error, quantified by a Loss Function. "
+                "Gradient Descent is the optimization algorithm used to iteratively compute gradients of this loss function. "
+                "By updating parameters in the reverse direction of the gradient, the model converges to a local minimum.\n\n"
+                "Section 1.3: Self-Attention and Transformers\n"
+                "Self-attention denotes the mechanism where a model scales relationships within a single sequence. "
+                "Transformers, introduced in 'Attention Is All You Need', leverage self-attention to parse language contexts. "
+                "They have revolutionized modern Artificial Intelligence and Natural Language Processing."
+            )
         return {"text": mock_text}
