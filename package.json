@@ -1,0 +1,12 @@
+{
+  "name": "mindmesh-monorepo",
+  "version": "1.0.0",
+  "description": "MindMesh monorepo for Next.js web application and FastAPI backend.",
+  "scripts": {
+    "dev:web": "npm run dev --prefix web",
+    "dev:api": "python -m uvicorn main:app --reload --app-dir api",
+    "install:web": "npm install --prefix web",
+    "install:api": "pip install -r api/requirements.txt",
+    "install:all": "npm run install:web && npm run install:api"
+  }
+}
