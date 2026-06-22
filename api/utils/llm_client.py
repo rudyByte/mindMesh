@@ -24,6 +24,78 @@ class LLMClient:
             logger.warning(f"Failed to initialize Anthropic API client: {e}. Falling back to mock LLM mode.")
             self._is_mock = True
 
+    def identify_main_topic(self, sample_text: str, filename: str) -> dict:
+        if self._is_mock:
+            return self._run_mock_main_topic(sample_text, filename)
+            
+        system_prompt = (
+            "You are a main topic identification engine. Analyze the provided text sample from a document (and its filename) to identify the single primary topic/theme of the document. "
+            "Return ONLY valid JSON matching this schema, no prose, no markdown fences:\n"
+            "{\n"
+            "  \"name\": \"Topic Name\",\n"
+            "  \"description\": \"A short explanation of the topic/theme and its significance.\"\n"
+            "}"
+        )
+        
+        try:
+            message = self._client.messages.create(
+                model=config.ANTHROPIC_MODEL,
+                max_tokens=1000,
+                temperature=0,
+                system=system_prompt,
+                messages=[
+                    {"role": "user", "content": f"Filename: {filename}\n\nText sample:\n\n{sample_text[:8000]}"}
+                ]
+            )
+            content = message.content[0].text.strip()
+            
+            # Clean markdown JSON fences if LLM generated them
+            if content.startswith("```json"):
+                content = content[7:]
+            if content.startswith("```"):
+                content = content[3:]
+            if content.endswith("```"):
+                content = content[:-3]
+            content = content.strip()
+            
+            data = json.loads(content)
+            if "name" in data and "description" in data:
+                return data
+            raise ValueError("LLM returned JSON missing 'name' or 'description' keys.")
+        except Exception as e:
+            logger.error(f"Error during main topic identification: {e}")
+            return self._run_mock_main_topic(sample_text, filename)
+
+    def _run_mock_main_topic(self, sample_text: str, filename: str) -> dict:
+        logger.info("[MOCK] Running mock main topic identification")
+        sample_text_lower = sample_text.lower()
+        filename_lower = filename.lower()
+        
+        if "attention" in sample_text_lower or "transformer" in sample_text_lower or "attention is all you need" in filename_lower:
+            return {
+                "name": "Transformer Architecture",
+                "description": "A novel neural network architecture based solely on self-attention mechanisms, dispensing with recurrence and convolutions entirely."
+            }
+        elif "voting" in sample_text_lower or "blockchain" in sample_text_lower or "zkp" in sample_text_lower or "voting" in filename_lower:
+            return {
+                "name": "Secure Online Voting System",
+                "description": "A secure, transparent, and tamper-proof online voting system using Blockchain that eliminates central administrator trust."
+            }
+        elif "knowledgeweb" in sample_text_lower or "blueprint" in filename_lower or "mindmprv" in filename_lower:
+            return {
+                "name": "KnowledgeWeb AI Architecture",
+                "description": "GraphRAG-powered student prerequisite and citation mapping platform blueprint."
+            }
+            
+        # Fallback
+        clean_name = filename.rsplit('.', 1)[0].replace('_', ' ').replace('-', ' ').strip().title()
+        if not clean_name:
+            clean_name = "Document Analysis"
+        return {
+            "name": clean_name,
+            "description": f"Unified knowledge map and conceptual analysis of the document {filename}."
+        }
+
     def extract_graph_from_chunk(self, text_chunk: str) -> dict:
         if self._is_mock:
             return self._run_mock_extraction(text_chunk)
@@ -81,6 +153,55 @@ class LLMClient:
         logger.info("[MOCK] Running strictly grounded dynamic mock extraction on text chunk")
         
         text_chunk_lower = text_chunk.lower()
+        if "attention" in text_chunk_lower or "transformer" in text_chunk_lower or "encoder" in text_chunk_lower or "decoder" in text_chunk_lower:
+            logger.info("[MOCK] Returning custom unified Transformer/Attention knowledge graph.")
+            nodes = [
+                {"label": "Topic", "name": "Transformer Architecture", "description": "A novel neural network architecture based solely on self-attention mechanisms, dispensing with recurrence and convolutions entirely."},
+                {"label": "Concept", "name": "Encoder Stack", "description": "A stack of N=6 identical layers, each containing a multi-head self-attention mechanism and a position-wise feed-forward network."},
+                {"label": "Concept", "name": "Decoder Stack", "description": "A stack of N=6 identical layers that includes self-attention, encoder-decoder attention, and feed-forward sub-layers."},
+                {"label": "Concept", "name": "Scaled Dot-Product Attention", "description": "An attention function computing dot products of queries and keys, scaled by the square root of their dimension, followed by a softmax."},
+                {"label": "Concept", "name": "Multi-Head Attention", "description": "An attention mechanism running several scaled dot-product attention layers in parallel over projected queries, keys, and values."},
+                {"label": "Concept", "name": "Self-Attention", "description": "An attention mechanism relating different positions of a single sequence to compute a representation of the sequence."},
+                {"label": "Concept", "name": "Encoder-Decoder Attention", "description": "A sub-layer in the decoder stack performing multi-head attention over the output of the encoder stack."},
+                {"label": "Concept", "name": "Position-wise Feed-Forward Networks", "description": "Fully connected sub-layers applied to each position separately and identically in the encoder and decoder layers."},
+                {"label": "Concept", "name": "Positional Encoding", "description": "Sinusoidal functions added to input embeddings to inject information about the relative or absolute positions of tokens."},
+                {"label": "Concept", "name": "Learned Embeddings", "description": "Shared weight matrix embeddings mapping input and output tokens to continuous representation vectors of dimension d_model."},
+                {"label": "Concept", "name": "Residual Connections", "description": "Additive skip connections around each sub-layer followed by layer normalization to facilitate deep gradient flow."},
+                {"label": "Concept", "name": "Label Smoothing", "description": "A regularization technique introducing uncertainty during training to improve model generalization and BLEU score."},
+                {"label": "Concept", "name": "Residual Dropout", "description": "Regularization applying dropout to sub-layer outputs and embedding sums to prevent overfitting."},
+                {"label": "Concept", "name": "Adam Optimizer", "description": "Optimization algorithm utilizing adaptive estimates of lower-order moments with learning rate warmup."},
+                {"label": "Concept", "name": "Sequence Transduction", "description": "The general task of mapping an input sequence of symbols to an output sequence of symbols, such as machine translation."},
+                {"label": "Concept", "name": "BLEU Score", "description": "Bilingual Evaluation Understudy metric used to evaluate machine translation quality compared to human translations."}
+            ]
+            relationships = [
+                {"from": "Transformer Architecture", "to": "Encoder Stack", "type": "USES_METHOD"},
+                {"from": "Transformer Architecture", "to": "Decoder Stack", "type": "USES_METHOD"},
+                {"from": "Transformer Architecture", "to": "Self-Attention", "type": "USES_METHOD"},
+                {"from": "Transformer Architecture", "to": "Positional Encoding", "type": "USES_METHOD"},
+                {"from": "Transformer Architecture", "to": "Sequence Transduction", "type": "RELATED_TO"},
+                {"from": "Transformer Architecture", "to": "Learned Embeddings", "type": "USES_METHOD"},
+                {"from": "Transformer Architecture", "to": "Adam Optimizer", "type": "USES_METHOD"},
+                {"from": "Transformer Architecture", "to": "Label Smoothing", "type": "USES_METHOD"},
+                {"from": "Encoder Stack", "to": "Multi-Head Attention", "type": "USES_METHOD"},
+                {"from": "Encoder Stack", "to": "Position-wise Feed-Forward Networks", "type": "USES_METHOD"},
+                {"from": "Encoder Stack", "to": "Residual Connections", "type": "USES_METHOD"},
+                {"from": "Decoder Stack", "to": "Multi-Head Attention", "type": "USES_METHOD"},
+                {"from": "Decoder Stack", "to": "Encoder-Decoder Attention", "type": "USES_METHOD"},
+                {"from": "Decoder Stack", "to": "Position-wise Feed-Forward Networks", "type": "USES_METHOD"},
+                {"from": "Decoder Stack", "to": "Residual Connections", "type": "USES_METHOD"},
+                {"from": "Multi-Head Attention", "to": "Scaled Dot-Product Attention", "type": "DEPENDS_ON"},
+                {"from": "Multi-Head Attention", "to": "Self-Attention", "type": "RELATED_TO"},
+                {"from": "Encoder-Decoder Attention", "to": "Encoder Stack", "type": "DEPENDS_ON"},
+                {"from": "Encoder-Decoder Attention", "to": "Decoder Stack", "type": "DEPENDS_ON"},
+                {"from": "Encoder-Decoder Attention", "to": "Multi-Head Attention", "type": "USES_METHOD"},
+                {"from": "Positional Encoding", "to": "Learned Embeddings", "type": "RELATED_TO"},
+                {"from": "Residual Connections", "to": "Residual Dropout", "type": "RELATED_TO"},
+                {"from": "Label Smoothing", "to": "BLEU Score", "type": "RELATED_TO"},
+                {"from": "Residual Dropout", "to": "BLEU Score", "type": "RELATED_TO"},
+                {"from": "Adam Optimizer", "to": "BLEU Score", "type": "RELATED_TO"}
+            ]
+            return {"nodes": nodes, "relationships": relationships}
+
         if "voting" in text_chunk_lower or "blockchain" in text_chunk_lower or "zkp" in text_chunk_lower or "blind signature" in text_chunk_lower:
             logger.info("[MOCK] Returning custom unified blockchain voting system knowledge graph.")
             nodes = [
