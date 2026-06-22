@@ -62,23 +62,6 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
       return;
     }
 
-    // Clear all cached data, previous uploads, and session memory
-    useStore.setState({
-      nodes: [],
-      edges: [],
-      selectedNode: null,
-      chatMessages: [],
-      chatLoading: false,
-      activeDocumentId: null,
-      documents: [],
-      documentText: null,
-      notes: [],
-      highlights: [],
-      citations: [],
-      activePathNodeIds: [],
-      learningPathNarration: null
-    });
-
     setFileName(file.name);
     setUploadState('uploading');
     setProgress(10);
@@ -106,7 +89,6 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
         status: 'processing',
         progress_pct: 10
       });
-      setActiveDocumentId(docId);
 
       // Start polling
       pollStatus(docId);
@@ -144,11 +126,32 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
           setProgress(100);
           clearInterval(intervalId);
           
+          // Set active document ID now that it's successfully done!
+          setActiveDocumentId(docId);
+          
+          // Clear frontend graph state before rendering the new graph
+          setGraphData({ nodes: [], edges: [] });
+          
           // Fetch and load graph
           const graphResponse = await fetch(`http://localhost:8000/documents/${docId}/graph`);
           if (graphResponse.ok) {
             const graphData = await graphResponse.json();
-            setGraphData(graphData);
+            
+            // Validate that no nodes from previous documents exist in graphData
+            const validatedNodes = (graphData.nodes || []).filter((node: any) => {
+              return !node.doc_id || node.doc_id === docId;
+            });
+            const validatedNodeIds = new Set(validatedNodes.map((n: any) => n.id));
+            const validatedEdges = (graphData.edges || []).filter((edge: any) => {
+              const fromId = typeof edge.source === 'object' ? edge.source.id : edge.source || edge.from;
+              const toId = typeof edge.target === 'object' ? edge.target.id : edge.target || edge.to;
+              return validatedNodeIds.has(fromId) && validatedNodeIds.has(toId);
+            });
+
+            setGraphData({
+              nodes: validatedNodes,
+              edges: validatedEdges
+            });
           }
         } else if (status === 'error') {
           setUploadState('error');
@@ -176,20 +179,20 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="relative w-full max-w-lg p-6 glass-panel rounded-2xl shadow-2xl">
+      <div className="relative w-full max-w-lg p-6 glass-panel rounded-2xl shadow-2xl border border-cyan-500/20">
         <button 
           onClick={onClose} 
-          className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+          className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
         >
           <X className="w-5 h-5" />
         </button>
 
         <div className="mb-4">
           <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
-            <Upload className="w-5 h-5 text-indigo-400" />
+            <Upload className="w-5 h-5 text-cyan-400" />
             Ingest Document
           </h2>
-          <p className="text-sm text-slate-400 mt-1">
+          <p className="text-sm text-slate-400 mt-1 font-sans">
             Upload text-based PDF textbook chapters or papers to expand your knowledge graph.
           </p>
         </div>
@@ -201,7 +204,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
             onDragLeave={handleDrag} 
             onDrop={handleDrop}
             className={`flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-10 transition-all cursor-pointer ${
-              dragActive ? 'border-indigo-500 bg-indigo-500/10' : 'border-slate-700 bg-slate-800/10 hover:border-slate-600'
+              dragActive ? 'border-cyan-500 bg-cyan-500/10' : 'border-cyan-500/20 bg-cyan-950/5 hover:border-cyan-500/40'
             }`}
             onClick={onButtonClick}
           >
@@ -212,40 +215,40 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
               accept=".pdf"
               onChange={handleChange}
             />
-            <Upload className="w-10 h-10 text-slate-400 mb-3" />
-            <p className="text-sm font-medium text-slate-300">
-              Drag and drop your PDF file here, or <span className="text-indigo-400 hover:text-indigo-300 underline font-semibold">browse</span>
+            <Upload className="w-10 h-10 text-cyan-500/40 mb-3" />
+            <p className="text-sm font-medium text-slate-300 font-sans">
+              Drag and drop your PDF file here, or <span className="text-cyan-400 hover:text-cyan-300 underline font-semibold">browse</span>
             </p>
-            <p className="text-xs text-slate-500 mt-1.5">Max size 25MB · Text-based PDF only</p>
+            <p className="text-xs text-slate-500 mt-1.5 font-sans">Max size 25MB · Text-based PDF only</p>
           </form>
         )}
 
         {uploadState !== 'idle' && (
-          <div className="p-6 border border-slate-800/60 bg-slate-900/40 rounded-xl">
+          <div className="p-6 border border-cyan-500/10 bg-[#030c0b]/40 rounded-xl">
             <div className="flex items-center gap-3.5 mb-4">
-              <div className="p-3 bg-indigo-500/10 rounded-lg text-indigo-400">
+              <div className="p-3 bg-cyan-500/10 rounded-lg text-cyan-400">
                 <FileText className="w-6 h-6" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-slate-200 truncate">{fileName}</p>
-                <p className="text-xs text-slate-400 mt-0.5">{getStatusText()}</p>
+                <p className="text-sm font-medium text-slate-200 truncate font-sans">{fileName}</p>
+                <p className="text-xs text-slate-400 mt-0.5 font-sans">{getStatusText()}</p>
               </div>
               {uploadState === 'done' && <CheckCircle2 className="w-6 h-6 text-emerald-500 flex-shrink-0" />}
               {uploadState === 'error' && <AlertCircle className="w-6 h-6 text-rose-500 flex-shrink-0" />}
               {(uploadState !== 'done' && uploadState !== 'error') && (
-                <Loader2 className="w-5 h-5 text-indigo-400 animate-spin flex-shrink-0" />
+                <Loader2 className="w-5 h-5 text-cyan-400 animate-spin flex-shrink-0" />
               )}
             </div>
 
             {uploadState !== 'error' && (
               <div className="space-y-1.5">
-                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                <div className="w-full bg-[#030c0b] border border-cyan-500/10 rounded-full h-1.5 overflow-hidden">
                   <div 
-                    className="bg-indigo-500 h-1.5 rounded-full transition-all duration-300"
+                    className="bg-cyan-500 h-1.5 rounded-full transition-all duration-300 shadow-[0_0_8px_rgba(6,182,212,0.6)]"
                     style={{ width: `${progress}%` }}
                   />
                 </div>
-                <div className="flex justify-between text-xs text-slate-500 font-medium">
+                <div className="flex justify-between text-xs text-slate-500 font-mono font-bold">
                   <span>{uploadState.toUpperCase()}</span>
                   <span>{progress}%</span>
                 </div>
@@ -253,7 +256,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
             )}
 
             {uploadState === 'error' && (
-              <div className="mt-2 text-xs text-rose-400 font-medium bg-rose-500/10 p-2.5 rounded-lg border border-rose-500/20">
+              <div className="mt-2 text-xs text-rose-400 font-semibold bg-rose-500/10 p-2.5 rounded-lg border border-rose-500/20 font-sans">
                 {errorMsg}
               </div>
             )}
@@ -262,14 +265,14 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
               {uploadState === 'error' && (
                 <button 
                   onClick={() => setUploadState('idle')}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all"
+                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all cursor-pointer font-sans"
                 >
                   Try Again
                 </button>
               )}
               <button 
                 onClick={onClose}
-                className="px-4 py-2 text-sm font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md"
+                className="px-4 py-2 text-sm font-semibold rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md cursor-pointer font-sans"
               >
                 Close
               </button>

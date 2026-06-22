@@ -129,7 +129,7 @@ export default function DashboardPage() {
   const activeDocTitle = documents.find(d => d.id === activeDocumentId)?.title || 'Document';
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#070b13] select-none text-slate-200">
+    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#030c0b]/20 backdrop-blur-sm select-none text-slate-200">
       {/* 3-Pane workspace layout */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left side controller navigation */}
@@ -141,13 +141,13 @@ export default function DashboardPage() {
         <div className="flex-1 h-full relative flex flex-col">
           {/* Header Tab ToggleHUD */}
           {activeDocumentId && (
-            <div className="absolute top-4 right-4 z-20 flex items-center gap-1 bg-slate-900/80 backdrop-blur border border-slate-800 p-1 rounded-xl shadow-lg">
+            <div className="absolute top-4 right-4 z-20 flex items-center gap-1 bg-[#031412]/80 backdrop-blur-lg border border-cyan-500/10 p-1 rounded-xl shadow-[0_0_15px_rgba(6,182,212,0.06)]">
               <button
                 onClick={() => setActiveTab('map')}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all ${
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
                   activeTab === 'map' 
-                    ? 'bg-indigo-600 text-white shadow-md' 
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-cyan-600/80 border border-cyan-400/30 text-white shadow-[0_0_10px_rgba(6,182,212,0.2)]' 
+                    : 'text-cyan-400/60 hover:text-cyan-200 hover:bg-cyan-950/20'
                 }`}
               >
                 <MapIcon className="w-3.5 h-3.5" />
@@ -155,10 +155,10 @@ export default function DashboardPage() {
               </button>
               <button
                 onClick={() => setActiveTab('text')}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all ${
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
                   activeTab === 'text' 
-                    ? 'bg-indigo-600 text-white shadow-md' 
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-cyan-600/80 border border-cyan-400/30 text-white shadow-[0_0_10px_rgba(6,182,212,0.2)]' 
+                    : 'text-cyan-400/60 hover:text-cyan-200 hover:bg-cyan-950/20'
                 }`}
               >
                 <FileText className="w-3.5 h-3.5" />
@@ -177,20 +177,20 @@ export default function DashboardPage() {
               /* PDF Document Raw Text Viewer (Sprint 4) */
               <ErrorBoundary name="Document Text Reader">
                 <div 
-                  className="w-full h-full p-8 overflow-y-auto bg-[#030712] font-sans flex flex-col items-center"
+                  className="w-full h-full p-8 overflow-y-auto bg-[#030c0b]/55 font-sans flex flex-col items-center border border-cyan-500/5 backdrop-blur-md"
                   onMouseUp={handleTextSelection}
                 >
                   <div className="w-full max-w-2xl space-y-6 select-text text-justify relative">
-                    <div className="border-b border-slate-800 pb-4 mb-4 select-none">
-                      <h2 className="text-sm font-bold text-indigo-400 flex items-center gap-2">
-                        <FileText className="w-4 h-4" /> {activeDocTitle}
+                    <div className="border-b border-cyan-500/10 pb-4 mb-4 select-none">
+                      <h2 className="text-sm font-bold text-cyan-400 flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-cyan-400" /> {activeDocTitle}
                       </h2>
-                      <p className="text-[10px] text-slate-500 mt-1 font-medium">
+                      <p className="text-[10px] text-slate-500 mt-1 font-medium font-sans">
                         Select any text block to save key insights as graph highlights.
                       </p>
                     </div>
 
-                    <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap font-medium">
+                    <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap font-medium font-sans">
                       {documentText || "Parsing document content..."}
                     </p>
 
@@ -204,7 +204,7 @@ export default function DashboardPage() {
                           top: `${popoverCoords.y}px`,
                           transform: 'translateX(-50%)',
                         }}
-                        className="z-30 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-[10px] font-bold rounded-lg shadow-xl hover:scale-105 transition-all duration-150 flex items-center gap-1 border border-indigo-400/20 select-none animate-bounce"
+                        className="z-30 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 text-white text-[10px] font-bold rounded-lg shadow-xl hover:scale-105 transition-all duration-150 flex items-center gap-1 border border-cyan-400/20 select-none animate-bounce cursor-pointer"
                       >
                         <Sparkles className="w-3.5 h-3.5" /> Save as Insight
                       </button>

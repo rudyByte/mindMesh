@@ -8,7 +8,8 @@ from pypdf import PdfReader
 
 from api.utils.neo4j_client import neo4j_client
 from api.utils.supabase_client import supabase_client
-from api.utils.llm_client import llm_client
+from api.utils.llm_client import llm_client, calculate_entity_quality, singularize_concept_name
+import re
 
 router = APIRouter()
 logger = logging.getLogger("documents_router")
@@ -27,10 +28,31 @@ class StatusResponse(BaseModel):
     progress_pct: int
     error: str | None = None
 
+def is_acronym_of(a: str, p: str) -> bool:
+    a_clean = re.sub(r'[^a-zA-Z]', '', a).upper()
+    p_words = [w for w in re.sub(r'[^a-zA-Z\s]', ' ', p).split() if w]
+    
+    if not (2 <= len(a_clean) <= 6) or len(p_words) < 2:
+        return False
+        
+    initials = "".join([w[0].upper() for w in p_words if w])
+    if a_clean == initials:
+        return True
+        
+    important_initials = "".join([w[0].upper() for w in p_words if w.lower() not in ["of", "and", "in", "from", "for", "with", "the"]])
+    if a_clean == important_initials:
+        return True
+        
+    return False
+
 def are_semantically_similar(name1: str, name2: str) -> bool:
     n1 = name1.lower().strip()
     n2 = name2.lower().strip()
     if n1 == n2:
+        return True
+        
+    # Check acronyms
+    if is_acronym_of(n1, n2) or is_acronym_of(n2, n1):
         return True
         
     def normalize_word(w):
@@ -69,6 +91,68 @@ def are_semantically_similar(name1: str, name2: str) -> bool:
                 return True
                 
     return False
+
+def enrich_node_descriptions(canonical_nodes: list, full_text: str):
+    cleaned_text = re.sub(r'\s+', ' ', full_text)
+    
+    for node in canonical_nodes:
+        desc = node.get("description", "").strip()
+        name = node.get("name", "").strip()
+        
+        if not desc or len(desc.split()) < 12 or any(p in desc.lower() for p in ["placeholder", "no description", "extracted yet"]):
+            matches = list(re.finditer(rf'\b{re.escape(name)}\b', cleaned_text, re.IGNORECASE))
+            if not matches:
+                idx = cleaned_text.lower().find(name.lower())
+                if idx != -1:
+                    class FakeMatch:
+                        def __init__(self, start, end):
+                            self._start = start
+                            self._end = end
+                        def start(self): return self._start
+                        def end(self): return self._end
+                    matches = [FakeMatch(idx, idx + len(name))]
+            
+            found_desc = ""
+            for match in matches:
+                start = max(0, match.start() - 150)
+                end = min(len(cleaned_text), match.end() + 250)
+                window = cleaned_text[start:end]
+                
+                sentences = re.split(r'(?<=[.!?])\s+', window)
+                for sent in sentences:
+                    sent = sent.strip()
+                    if name.lower() in sent.lower():
+                        sent_low = sent.lower()
+                        is_def = any(pattern in sent_low for pattern in [
+                            " is ", " are ", " refers to ", " is defined as ", " represents ", " denotes ", " refers ", " is a ", " is an "
+                        ])
+                        if is_def and len(sent.split()) >= 10:
+                            found_desc = sent
+                            break
+                if found_desc:
+                    break
+                    
+            if not found_desc and matches:
+                first_match = matches[0]
+                start = max(0, first_match.start() - 100)
+                end = min(len(cleaned_text), first_match.end() + 200)
+                window = cleaned_text[start:end]
+                sentences = re.split(r'(?<=[.!?])\s+', window)
+                for sent in sentences:
+                    sent = sent.strip()
+                    if name.lower() in sent.lower() and len(sent.split()) >= 8:
+                        found_desc = sent
+                        break
+            
+            if found_desc:
+                found_desc = re.sub(r'\s+', ' ', found_desc).strip()
+                if len(found_desc) > 250:
+                    found_desc = found_desc[:247] + "..."
+                if found_desc:
+                    found_desc = found_desc[0].upper() + found_desc[1:]
+                node["description"] = found_desc
+            elif not desc:
+                node["description"] = f"Key concept of {name} extracted from the document."
 
 def cluster_and_merge_nodes(nodes: list) -> tuple[list, dict]:
     clusters = []
@@ -126,6 +210,9 @@ def cluster_and_merge_nodes(nodes: list) -> tuple[list, dict]:
             "description": canonical_desc,
             "difficulty_level": rep.get("difficulty_level", "Beginner")
         }
+        for k, v in rep.items():
+            if k not in canonical_node:
+                canonical_node[k] = v
         canonical_nodes.append(canonical_node)
         
         for node in cluster:
@@ -195,6 +282,58 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
             current_progress = int(40 + (i + 1) * step_increment)
             extraction_status_cache[doc_id]["progress_pct"] = min(90, current_progress)
             
+        # Entity Quality Validation Blocker
+        if all_nodes:
+            low_quality_nodes = []
+            for node in all_nodes:
+                score = calculate_entity_quality(node.get("name", ""), node.get("label", "Concept"))
+                if score < 0.6:
+                    low_quality_nodes.append(node.get("name", ""))
+            
+            low_quality_ratio = len(low_quality_nodes) / len(all_nodes)
+            logger.info(f"Pipeline quality check: Total nodes={len(all_nodes)}, Low-quality={len(low_quality_nodes)} ({low_quality_ratio:.2%})")
+            
+            if low_quality_ratio > 0.20:
+                logger.error(f"Validation failed: {low_quality_ratio:.2%} of extracted nodes are low-quality: {low_quality_nodes[:15]}")
+                raise ValueError(
+                    f"Graph extraction validation failed: {low_quality_ratio:.1%} of extracted terms are low-quality (exceeds 20% limit). "
+                    f"Examples of low-quality terms: {', '.join(low_quality_nodes[:5])}"
+                )
+            
+            # Filter out low-value nodes automatically
+            all_nodes = [n for n in all_nodes if calculate_entity_quality(n.get("name", ""), n.get("label", "Concept")) >= 0.6]
+
+        # Check multi-document mode config
+        from api.config import config
+        multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False)
+
+        if not multi_doc_mode:
+            # Clear all cached data, previous uploads, embeddings, vector-store entries, and session memory
+            # keeping only the current doc_id status to keep it polling!
+            for k in list(extraction_status_cache.keys()):
+                if k != doc_id:
+                    extraction_status_cache.pop(k, None)
+            
+            # Clear files from storage
+            try:
+                supabase_client.clear_bucket("documents")
+            except Exception as e:
+                logger.error(f"Failed to clear storage bucket: {e}")
+
+            if neo4j_client.is_mock():
+                # Clear mock nodes/edges but preserve the current Document node
+                current_doc = neo4j_client.mock_nodes.get(doc_id)
+                neo4j_client.mock_nodes.clear()
+                neo4j_client.mock_edges.clear()
+                if current_doc:
+                    neo4j_client.mock_nodes[doc_id] = current_doc
+            else:
+                # Delete all nodes except the current Document node
+                neo4j_client.run_query(
+                    "MATCH (n) WHERE NOT (n:Document AND n.id = $doc_id) DETACH DELETE n",
+                    {"doc_id": doc_id}
+                )
+
         # 4. Idempotent Merge Writes to Neo4j
         # Prepare the central node
         central_node = {
@@ -210,6 +349,10 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
         # Run global semantic merging and clustering
         canonical_nodes, name_mapping = cluster_and_merge_nodes(all_nodes)
         
+        # Enrich descriptions using document text context
+        logger.info("Enriching node descriptions using document text context...")
+        enrich_node_descriptions(canonical_nodes, text)
+
         # Rewrite relationships to use canonical names
         merged_relationships = []
         seen_rels = set()
@@ -238,11 +381,15 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
                 
         # Ensure graph connectivity (connect isolated nodes/subgraphs to the central node)
         nodes_by_name = {n["name"].lower().strip(): n for n in canonical_nodes}
+        
         central_name_lower = central_node["name"].lower().strip()
-        if central_name_lower not in nodes_by_name:
+        resolved_central_name = name_mapping.get(central_name_lower, central_node["name"])
+        resolved_central_lower = resolved_central_name.lower().strip()
+        
+        if resolved_central_lower not in nodes_by_name:
             # Re-insert central node just in case
             canonical_nodes.append(central_node)
-            nodes_by_name[central_name_lower] = central_node
+            nodes_by_name[resolved_central_lower] = central_node
             
         adj = {name: set() for name in nodes_by_name.keys()}
         for rel in merged_relationships:
@@ -274,7 +421,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
         # Find index of the component containing the central node
         central_comp_idx = -1
         for idx, comp in enumerate(components):
-            if central_name_lower in comp:
+            if resolved_central_lower in comp:
                 central_comp_idx = idx
                 break
                 
@@ -297,7 +444,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
                         max_deg = deg
                         target_node_name = node_name
                         
-                central_canonical_name = nodes_by_name[central_name_lower]["name"]
+                central_canonical_name = nodes_by_name[resolved_central_lower]["name"]
                 target_canonical_name = nodes_by_name[target_node_name]["name"]
                 
                 final_relationships.append({
@@ -307,6 +454,25 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
                 })
                 logger.info(f"Connected disconnected component starting with node '{target_canonical_name}' to central topic '{central_canonical_name}'")
                 
+                # Re-add to adjacency list for deg logs
+                f_low = central_canonical_name.lower().strip()
+                t_low = target_canonical_name.lower().strip()
+                if f_low in adj and t_low in adj:
+                    adj[f_low].add(t_low)
+                    adj[t_low].add(f_low)
+                
+        # Log top extracted concepts and relationships
+        logger.info("=== TOP EXTRACTED KNOWLEDGE GRAPH ELEMENTS ===")
+        sorted_nodes_log = sorted(canonical_nodes, key=lambda x: len(adj.get(x["name"].lower().strip(), set())), reverse=True)
+        logger.info("Top 10 Concepts (sorted by connections):")
+        for node in sorted_nodes_log[:10]:
+            deg = len(adj.get(node["name"].lower().strip(), set()))
+            logger.info(f"  - [{node.get('label')}] {node.get('name')} ({deg} connections): {node.get('description')[:120]}...")
+            
+        logger.info("Top 10 Relationships:")
+        for rel in final_relationships[:10]:
+            logger.info(f"  - {rel.get('from')} --[{rel.get('type')}]--> {rel.get('to')}")
+            
         logger.info(f"Writing {len(canonical_nodes)} canonical nodes and {len(final_relationships)} connected relationships to Neo4j.")
         
         # Write nodes to Neo4j
@@ -319,14 +485,52 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
             
             node_id = str(uuid.uuid4())
             
+            # Check multi-document mode config
+            from api.config import config
+            multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False)
+
             # Neo4j query
-            query = f"""
-            MERGE (n:{label} {{name: $name, doc_id: $doc_id}})
-            ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner'
-            ON MATCH SET n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END
-            RETURN n.id as node_id
-            """
-            res = neo4j_client.run_query(query, {"name": name, "id": node_id, "description": desc, "doc_id": doc_id})
+            if label == "Paper":
+                year = node.get("year")
+                doi = node.get("doi")
+                if multi_doc_mode:
+                    query = """
+                    MERGE (n:Paper {name: $name})
+                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id, n.year = $year, n.doi = $doi
+                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.doi = $doi
+                    RETURN n.id as node_id
+                    """
+                else:
+                    query = """
+                    MERGE (n:Paper {name: $name, doc_id: $doc_id})
+                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.year = $year, n.doi = $doi
+                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.doi = $doi
+                    RETURN n.id as node_id
+                    """
+            else:
+                if multi_doc_mode:
+                    query = f"""
+                    MERGE (n:{label} {{name: $name}})
+                    ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id
+                    ON MATCH SET n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END
+                    RETURN n.id as node_id
+                    """
+                else:
+                    query = f"""
+                    MERGE (n:{label} {{name: $name, doc_id: $doc_id}})
+                    ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner'
+                    ON MATCH SET n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END
+                    RETURN n.id as node_id
+                    """
+            
+            res = neo4j_client.run_query(query, {
+                "name": name, 
+                "id": node_id, 
+                "description": desc, 
+                "doc_id": doc_id,
+                "year": node.get("year"),
+                "doi": node.get("doi")
+            })
             
             # Capture the resolved node ID
             resolved_id = node_id
@@ -344,14 +548,34 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
 
             # Also seed to mock store if in mock mode
             if neo4j_client.is_mock():
-                neo4j_client.mock_nodes[resolved_id] = {
-                    "id": resolved_id,
-                    "label": label,
-                    "name": name,
-                    "description": desc,
-                    "difficulty_level": "Beginner",
-                    "doc_id": doc_id
-                }
+                existing_id = None
+                for nid, mn in neo4j_client.mock_nodes.items():
+                    if mn.get("label") == label and mn.get("name", "").lower() == name.lower():
+                        if multi_doc_mode or mn.get("doc_id") == doc_id:
+                            existing_id = nid
+                            break
+                if existing_id:
+                    resolved_id = existing_id
+                    if not neo4j_client.mock_nodes[resolved_id].get("description"):
+                        neo4j_client.mock_nodes[resolved_id]["description"] = desc
+                else:
+                    resolved_id = node_id
+                    node_data = {
+                        "id": resolved_id,
+                        "label": label,
+                        "name": name,
+                        "description": desc,
+                        "difficulty_level": "Beginner",
+                        "doc_id": doc_id
+                    }
+                    if label == "Paper":
+                        node_data["title"] = name
+                        if "year" in node:
+                            node_data["year"] = node["year"]
+                        if "doi" in node:
+                            node_data["doi"] = node["doi"]
+                    neo4j_client.mock_nodes[resolved_id] = node_data
+                node["resolved_id"] = resolved_id
 
         # Write relationships to Neo4j
         for rel in final_relationships:
@@ -378,10 +602,11 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
                 from_id = None
                 to_id = None
                 for nid, n in neo4j_client.mock_nodes.items():
-                    if n.get("doc_id") == doc_id:
-                        if n.get("name", "").lower() == from_name.lower():
+                    if n.get("name", "").lower() == from_name.lower():
+                        if multi_doc_mode or n.get("doc_id") == doc_id:
                             from_id = nid
-                        if n.get("name", "").lower() == to_name.lower():
+                    if n.get("name", "").lower() == to_name.lower():
+                        if multi_doc_mode or n.get("doc_id") == doc_id:
                             to_id = nid
                 if from_id and to_id:
                     neo4j_client.mock_edges.append({
@@ -415,23 +640,6 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
         raise HTTPException(status_code=400, detail="Only PDF documents are supported.")
         
     try:
-        # Clear all cached data, previous uploads, embeddings, vector-store entries, and session memory
-        extraction_status_cache.clear()
-        
-        # Clear files from storage
-        try:
-            supabase_client.clear_bucket("documents")
-        except Exception as e:
-            logger.error(f"Failed to clear storage bucket: {e}")
-
-        if neo4j_client.is_mock():
-            # Clear all mock nodes and edges from the mock database
-            neo4j_client.mock_nodes.clear()
-            neo4j_client.mock_edges.clear()
-        else:
-            # Delete all nodes and relationships in the Neo4j database
-            neo4j_client.run_query("MATCH (n) DETACH DELETE n")
-
         # Read file bytes
         file_bytes = await file.read()
         
@@ -491,6 +699,9 @@ def get_document_status(id: str):
 
 @router.get("/documents/{id}/graph")
 def get_document_graph(id: str):
+    from api.config import config
+    multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False)
+
     if neo4j_client.is_mock():
         # Find all mock nodes containing relationships with this document ID
         doc_node_ids = set()
@@ -501,7 +712,13 @@ def get_document_graph(id: str):
         # If the document is the initial placeholder "doc-1" and has no CONTAINS relationships,
         # fallback to returning all pre-seeded ML concepts (excluding the Document node itself)
         if not doc_node_ids and id == "doc-1":
-            ml_nodes = [n for n in neo4j_client.mock_nodes.values() if n.get("label") != "Document"]
+            ml_nodes = []
+            for n in neo4j_client.mock_nodes.values():
+                if n.get("label") != "Document":
+                    n_copy = dict(n)
+                    if not n_copy.get("name") and n_copy.get("title"):
+                        n_copy["name"] = n_copy["title"]
+                    ml_nodes.append(n_copy)
             ml_node_ids = {n["id"] for n in ml_nodes}
             ml_edges = [
                 e for e in neo4j_client.mock_edges 
@@ -510,17 +727,30 @@ def get_document_graph(id: str):
             return {"nodes": ml_nodes, "edges": ml_edges}
             
         # Return only the nodes and edges for this specific document
-        doc_nodes = [n for nid, n in neo4j_client.mock_nodes.items() if nid in doc_node_ids]
+        doc_nodes = []
+        for nid, n in neo4j_client.mock_nodes.items():
+            if nid in doc_node_ids:
+                node_doc_id = n.get("doc_id")
+                # Validation: if not multi-document mode, verify node matches document namespace
+                if not multi_doc_mode and node_doc_id and node_doc_id != id:
+                    logger.error(f"Validation Error: Node {n.get('name') or n.get('title')} belongs to document {node_doc_id}, expected {id}")
+                    continue
+                n_copy = dict(n)
+                if not n_copy.get("name") and n_copy.get("title"):
+                    n_copy["name"] = n_copy["title"]
+                doc_nodes.append(n_copy)
+                
+        doc_node_ids_filtered = {n["id"] for n in doc_nodes}
         doc_edges = [
             e for e in neo4j_client.mock_edges 
-            if e["type"] != "CONTAINS" and e["from"] in doc_node_ids and e["to"] in doc_node_ids
+            if e["type"] != "CONTAINS" and e["from"] in doc_node_ids_filtered and e["to"] in doc_node_ids_filtered
         ]
         return {"nodes": doc_nodes, "edges": doc_edges}
         
     # Fetch nodes in the document
     nodes_query = """
     MATCH (d:Document {id: $doc_id})-[:CONTAINS]->(n)
-    RETURN labels(n)[0] as label, n.id as id, n.name as name, n.description as description, n.difficulty_level as difficulty_level
+    RETURN labels(n)[0] as label, n.id as id, coalesce(n.name, n.title) as name, n.description as description, n.difficulty_level as difficulty_level, n.doc_id as doc_id, n.year as year, n.doi as doi
     """
     nodes_res = neo4j_client.run_query(nodes_query, {"doc_id": id})
     
@@ -534,22 +764,36 @@ def get_document_graph(id: str):
     edges_res = neo4j_client.run_query(edges_query, {"doc_id": id})
     
     nodes = []
+    valid_node_ids = set()
     for r in nodes_res:
-        nodes.append({
+        node_doc_id = r.get("doc_id")
+        # Validation: if not multi-document mode, verify node matches document namespace
+        if not multi_doc_mode and node_doc_id and node_doc_id != id:
+            logger.error(f"Validation Error: Node {r['name']} belongs to document {node_doc_id}, expected {id}")
+            continue
+        node_data = {
             "id": r["id"],
             "label": r["label"],
-            "name": r["name"],
+            "name": r["name"] or "Unknown",
             "description": r.get("description", ""),
-            "difficulty_level": r.get("difficulty_level", "Beginner")
-        })
+            "difficulty_level": r.get("difficulty_level", "Beginner"),
+            "doc_id": node_doc_id
+        }
+        if r.get("year") is not None:
+            node_data["year"] = r["year"]
+        if r.get("doi") is not None:
+            node_data["doi"] = r["doi"]
+        nodes.append(node_data)
+        valid_node_ids.add(r["id"])
         
     edges = []
     for r in edges_res:
-        edges.append({
-            "from": r["from_id"],
-            "to": r["to_id"],
-            "type": r["type"]
-        })
+        if r["from_id"] in valid_node_ids and r["to_id"] in valid_node_ids:
+            edges.append({
+                "from": r["from_id"],
+                "to": r["to_id"],
+                "type": r["type"]
+            })
         
     return {"nodes": nodes, "edges": edges}
 

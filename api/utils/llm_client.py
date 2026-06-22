@@ -6,6 +6,122 @@ from api.config import config
 
 logger = logging.getLogger("llm_client")
 
+GENERIC_BLACKLIST = {
+    # Pronouns & basic structural words
+    "something", "anything", "nothing", "someone", "anyone", "everyone", "nobody", "everybody",
+    # Common conversational fillers/adverbs/adjectives
+    "for example", "such as", "however", "therefore", "nevertheless", "furthermore", "consequently",
+    "indeed", "instead", "meanwhile", "besides", "moreover", "otherwise", "similarly", "specifically",
+    "especially", "particularly", "primarily", "secondly", "thirdly", "finally", "lastly",
+    # Generic, non-domain nouns & terms
+    "example", "examples", "case", "cases", "thing", "things", "part", "parts", "term", "terms",
+    "concept", "concepts", "system", "systems", "approach", "approaches", "model", "models",
+    "method", "methods", "methodology", "methodologies", "framework", "frameworks", "process", "processes",
+    "technology", "technologies", "application", "applications", "data", "information", "detail", "details",
+    "fact", "facts", "idea", "ideas", "knowledge", "structure", "structures", "problem", "problems",
+    "solution", "solutions", "challenge", "challenges", "result", "results", "analysis", "analyses",
+    "evaluation", "evaluations", "experiment", "experiments", "test", "tests", "performance", "performances",
+    "comparison", "comparisons", "difference", "differences", "similarity", "similarities", "feature", "features",
+    "property", "properties", "characteristic", "characteristics", "aspect", "aspects", "factor", "factors",
+    "element", "elements", "component", "components", "object", "objects", "subject", "subjects",
+    "user", "users", "client", "clients", "server", "servers", "network", "networks", "environment", "environments",
+    "device", "devices", "resource", "resources", "tool", "tools", "way", "ways", "mode", "modes", "step", "steps",
+    "phase", "phases", "stage", "stages", "level", "levels", "type", "types", "kind", "kinds", "class", "classes",
+    "group", "groups", "set", "sets", "category", "categories", "section", "sections", "chapter", "chapters",
+    "page", "pages", "figure", "figures", "table", "tables", "chart", "charts", "graph", "graphs", "diagram", "diagrams",
+    "image", "images", "file", "files", "document", "documents", "paper", "papers", "article", "articles",
+    "text", "texts", "book", "books", "note", "notes", "key", "keys", "value", "values", "right", "left",
+    "extracting", "consistent", "consistency", "volume", "connectivity", "requirement", "requirements",
+    "usage", "frequency", "power", "connectivity", "thing", "things", "internet", "world", "critical",
+    "abstract", "introduction", "conclusion", "discussion", "references", "author", "title", "pdf", "ocr", "scanned"
+}
+
+def calculate_entity_quality(name: str, label: str) -> float:
+    n_clean = name.strip()
+    n_lower = n_clean.lower()
+    
+    # 1. Length checks
+    if len(n_clean) <= 2:
+        return 0.0  # too short
+    if len(n_clean) >= 60:
+        return 0.0  # too long (often a parsed phrase/sentence or formatting error)
+        
+    # 2. Blacklist / Generic check (both exact and substring matching for common phrases)
+    if n_lower in GENERIC_BLACKLIST:
+        return 0.0
+        
+    # Singularized check
+    singular_n = n_lower
+    if n_lower.endswith('s') and not n_lower.endswith('ss') and not n_lower.endswith('us') and not n_lower.endswith('is'):
+        singular_n = n_lower[:-1]
+    if singular_n in GENERIC_BLACKLIST:
+        return 0.0
+        
+    # Check repeating words: e.g. "Data Data Data", "data data", "Test Test Test", repeated words
+    if re.search(r'\b(\w{2,})\b(?:\s+\1\b)+', n_lower):
+        return 0.0
+        
+    # Check repeating character sequences: e.g. "TESTTESTTEST", "abcabcabc"
+    if re.search(r'(\w{3,})\1+', n_lower):
+        return 0.0
+        
+    # Check placeholder/spam terms: e.g. "abc", "xyz", "qwe", "testtest", "dummy", "lorem", "ipsum"
+    spam_terms = {"abc", "xyz", "qwe", "foo", "bar", "baz", "test", "testtest", "dummy", "lorem", "ipsum", "placeholder", "testtesttest", "spam", "garbage"}
+    words_lower = n_lower.split()
+    if any(w in spam_terms for w in words_lower) or any(t in n_lower for t in ["abc xyz", "xyz qwe", "abc xyz qwe", "testtest"]):
+        return 0.0
+
+    # Check mixed alphanumeric random strings without spaces (e.g. XYZ123XYZ, ABC99XYZ)
+    if re.search(r'\b[a-zA-Z]+\d+[a-zA-Z]+\b', n_lower) or re.search(r'\b\d+[a-zA-Z]+\d+\b', n_lower):
+        return 0.0
+
+    # Check for random strings/gibberish (length >= 4 and no vowels at all, e.g. XYZ123XYZ has no vowels, qwrty has no vowels)
+    for w in words_lower:
+        if len(w) >= 4 and not any(v in w for v in 'aeiouy'):
+            return 0.0
+
+    # 3. Word count check: domain concepts are usually 1-4 words.
+    words = n_clean.split()
+    if len(words) > 4:
+        # Deduct heavily for very long phrases (they are likely sentences/noise)
+        return max(0.0, 1.0 - (len(words) - 4) * 0.25)
+        
+    # 4. OCR / Punctuation noise and layout artifacts
+    special_chars = len(re.findall(r'[^a-zA-Z0-9\s-]', n_clean))
+    if special_chars > 2:
+        return 0.1
+        
+    # Check if it consists mostly of numbers or contains noise patterns
+    if re.search(r'\d{3,}', n_clean):  # 3 or more digits (like page numbers, years, serials)
+        return 0.2
+    if re.match(r'^[_\-\d\s\W]+$', n_clean):  # only symbols/digits
+        return 0.0
+        
+    # 5. Section headers (e.g. "Chapter 1", "Section A", "Figure 5", "Page 1")
+    if re.match(r'^(chapter|section|figure|table|page|index|appendix|vol|volume|no|part|fig)\b', n_lower):
+        return 0.0
+        
+    # 6. Common transitional phrases
+    if any(n_lower.startswith(x) for x in ["for example", "such as", "based on", "due to", "in order to"]):
+        return 0.1
+
+    return 1.0
+
+def singularize_concept_name(name: str) -> str:
+    n = name.strip()
+    n_lower = n.lower()
+    
+    # Plural rules
+    if n_lower.endswith('ies'):
+        return n[:-3] + 'y'
+    elif n_lower.endswith('es') and not n_lower.endswith('see'):
+        if n_lower.endswith('ices'):
+            return n[:-4] + 'ex'
+        return n[:-2]
+    elif n_lower.endswith('s') and not n_lower.endswith('ss') and not n_lower.endswith('us') and not n_lower.endswith('is'):
+        return n[:-1]
+    return n
+
 class LLMClient:
     def __init__(self):
         self._client = None
@@ -101,17 +217,17 @@ class LLMClient:
             return self._run_mock_extraction(text_chunk)
             
         system_prompt = (
-            "You are a strict, grounded knowledge graph extraction engine. Given a text chunk, extract ONLY concepts, topics, papers, authors, or institutions that are EXPLICITLY mentioned in the text chunk. "
-            "Do NOT include any external knowledge, assumptions, or information not directly written in the text. "
-            "Do NOT assume or extrapolate prerequisite relationships unless they are explicitly described or logically necessary and stated in the text. "
-            "Extract ONLY these node types if explicitly present: "
-            "Concept, Topic, Keyword, Paper, Author, Institution. Extract ONLY these relationship types: "
-            "PREREQUISITE_OF, RELATED_TO, EXTENDS, CONTRADICTS, USES_METHOD, DEPENDS_ON, CITES, AUTHORED_BY, "
-            "AFFILIATED_WITH, MENTIONS, HAS_KEYWORD. Return ONLY valid JSON matching this schema, no prose, "
-            "no markdown fences:\n"
+            "You are a strict, grounded knowledge graph extraction engine. Given a text chunk, extract ONLY high-quality concepts, topics, papers, authors, or institutions that are EXPLICITLY mentioned. "
+            "CRITICAL: Do NOT extract generic words (e.g., 'Data', 'System', 'Process', 'Approach', 'Model', 'Connectivity', 'Example'), conversational phrases (e.g., 'For Example', 'However', 'Therefore'), "
+            "section headers ('Chapter 1', 'Section A'), page numbers, or formatting noise. Every extracted node must represent a meaningful domain-specific concept, technology, paper, or entity. "
+            "For every extracted node, you MUST write a complete, rich, context-grounded description of at least 2-3 sentences based on the text. Avoid single-word or brief descriptions. "
+            "Do NOT include any external knowledge or assumptions. "
+            "Extract ONLY these node types: Concept, Topic, Keyword, Paper, Author, Institution. "
+            "Extract ONLY these relationship types: PREREQUISITE_OF, RELATED_TO, EXTENDS, CONTRADICTS, USES_METHOD, DEPENDS_ON, CITES, AUTHORED_BY, AFFILIATED_WITH, MENTIONS, HAS_KEYWORD. "
+            "Return ONLY valid JSON matching this schema, no prose, no markdown fences:\n"
             "{\n"
             "  \"nodes\": [\n"
-            "    {\"label\": \"Concept\", \"name\": \"Linear Algebra\", \"description\": \"Study of vectors and matrices.\"}\n"
+            "    {\"label\": \"Concept\", \"name\": \"Linear Algebra\", \"description\": \"Linear algebra is the branch of mathematics concerning linear equations, linear functions, and their representations through matrices and vector spaces. It forms the mathematical foundation for machine learning algorithms like neural networks.\"}\n"
             "  ],\n"
             "  \"relationships\": [\n"
             "    {\"from\": \"Linear Algebra\", \"to\": \"Neural Networks\", \"type\": \"PREREQUISITE_OF\"}\n"
@@ -153,6 +269,21 @@ class LLMClient:
         logger.info("[MOCK] Running strictly grounded dynamic mock extraction on text chunk")
         
         text_chunk_lower = text_chunk.lower()
+        if "noisy_pdf_trigger" in text_chunk_lower:
+            logger.info("[MOCK] Returning noisy nodes to trigger the 20% validation failure.")
+            nodes = [
+                {"label": "Concept", "name": "Valid Concept One", "description": "This is a valid domain concept."},
+                {"label": "Concept", "name": "Valid Concept Two", "description": "This is another valid domain concept."},
+                {"label": "Concept", "name": "Lorem", "description": "Garbage entity."},
+                {"label": "Concept", "name": "Page 1", "description": "Garbage entity."},
+                {"label": "Concept", "name": "Test Test Test", "description": "Garbage entity."},
+                {"label": "Concept", "name": "XYZ123XYZ", "description": "Garbage entity."},
+            ]
+            relationships = [
+                {"from": "Valid Concept One", "to": "Valid Concept Two", "type": "RELATED_TO"}
+            ]
+            return {"nodes": nodes, "relationships": relationships}
+
         if "attention" in text_chunk_lower or "transformer" in text_chunk_lower or "encoder" in text_chunk_lower or "decoder" in text_chunk_lower:
             logger.info("[MOCK] Returning custom unified Transformer/Attention knowledge graph.")
             nodes = [
@@ -171,7 +302,13 @@ class LLMClient:
                 {"label": "Concept", "name": "Residual Dropout", "description": "Regularization applying dropout to sub-layer outputs and embedding sums to prevent overfitting."},
                 {"label": "Concept", "name": "Adam Optimizer", "description": "Optimization algorithm utilizing adaptive estimates of lower-order moments with learning rate warmup."},
                 {"label": "Concept", "name": "Sequence Transduction", "description": "The general task of mapping an input sequence of symbols to an output sequence of symbols, such as machine translation."},
-                {"label": "Concept", "name": "BLEU Score", "description": "Bilingual Evaluation Understudy metric used to evaluate machine translation quality compared to human translations."}
+                {"label": "Concept", "name": "BLEU Score", "description": "Bilingual Evaluation Understudy metric used to evaluate machine translation quality compared to human translations."},
+                # Extracted Paper and Authors
+                {"label": "Paper", "name": "Attention Is All You Need", "description": "The landmark paper introducing the Transformer architecture, replacing RNNs/CNNs with self-attention for sequence transduction tasks.", "year": 2017, "doi": "10.48550/arXiv.1706.03762"},
+                {"label": "Author", "name": "Ashish Vaswani", "description": "Lead author of Attention Is All You Need and researcher at Google Brain."},
+                {"label": "Author", "name": "Noam Shazeer", "description": "Co-author of Attention Is All You Need, known for key contributions to Transformer training scalability."},
+                {"label": "Author", "name": "Niki Parmar", "description": "Co-author of Attention Is All You Need and AI researcher at Google Brain."},
+                {"label": "Author", "name": "Jakob Uszkoreit", "description": "Co-author of Attention Is All You Need, senior software engineer and AI researcher."}
             ]
             relationships = [
                 {"from": "Transformer Architecture", "to": "Encoder Stack", "type": "USES_METHOD"},
@@ -198,7 +335,14 @@ class LLMClient:
                 {"from": "Residual Connections", "to": "Residual Dropout", "type": "RELATED_TO"},
                 {"from": "Label Smoothing", "to": "BLEU Score", "type": "RELATED_TO"},
                 {"from": "Residual Dropout", "to": "BLEU Score", "type": "RELATED_TO"},
-                {"from": "Adam Optimizer", "to": "BLEU Score", "type": "RELATED_TO"}
+                {"from": "Adam Optimizer", "to": "BLEU Score", "type": "RELATED_TO"},
+                # Paper & Author relationships
+                {"from": "Attention Is All You Need", "to": "Ashish Vaswani", "type": "AUTHORED_BY"},
+                {"from": "Attention Is All You Need", "to": "Noam Shazeer", "type": "AUTHORED_BY"},
+                {"from": "Attention Is All You Need", "to": "Niki Parmar", "type": "AUTHORED_BY"},
+                {"from": "Attention Is All You Need", "to": "Jakob Uszkoreit", "type": "AUTHORED_BY"},
+                {"from": "Attention Is All You Need", "to": "Transformer Architecture", "type": "USES_METHOD"},
+                {"from": "Attention Is All You Need", "to": "Self-Attention", "type": "USES_METHOD"}
             ]
             return {"nodes": nodes, "relationships": relationships}
 
@@ -281,19 +425,22 @@ class LLMClient:
             matches = re.findall(r'\b([A-Z][a-zA-Z0-9\'-]*(?:\s+[A-Z][a-zA-Z0-9\'-]*)*)\b', sent)
             for phrase in matches:
                 phrase_clean = phrase.strip()
-                phrase_low = phrase_clean.lower()
                 
-                # Filter out stopwords or single letter names
+                phrase_low = phrase_clean.lower()
                 if phrase_low in STOP_WORDS or len(phrase_clean) < 3:
                     continue
                 
+                # Normalize name (singularize common plurals)
+                normalized_name = singularize_concept_name(phrase_clean)
+                normalized_low = normalized_name.lower()
+                
                 # Deduplicate and create candidate node
-                if phrase_low not in concepts_map:
+                if normalized_low not in concepts_map:
                     # Dynamically determine Label
                     label = "Concept"
-                    if any(x in phrase_clean for x in ["University", "Institute", "Research", "Lab", "Company", "Google", "Microsoft"]):
+                    if any(x in normalized_name for x in ["University", "Institute", "Research", "Lab", "Company", "Google", "Microsoft"]):
                         label = "Institution"
-                    elif phrase_clean.startswith("Chapter") or phrase_clean.startswith("Section"):
+                    elif normalized_name.startswith("Chapter") or normalized_name.startswith("Section"):
                         label = "Topic"
                     
                     # Try to extract a definition from the sentence
@@ -305,18 +452,17 @@ class LLMClient:
                     )
                     if def_match:
                         description = def_match.group(1).strip()
-                        # Capitalize first letter
                         if description:
                             description = description[0].upper() + description[1:]
                     else:
                         # Fallback: clean the sentence containing the concept as description
                         description = sent
-                        if len(description) > 120:
-                            description = description[:117] + "..."
+                        if len(description) > 150:
+                            description = description[:147] + "..."
                             
-                    concepts_map[phrase_low] = {
+                    concepts_map[normalized_low] = {
                         "label": label,
-                        "name": phrase_clean,
+                        "name": normalized_name,
                         "description": description
                     }
 
@@ -351,13 +497,11 @@ class LLMClient:
                         
                         rel_type = "RELATED_TO"
                         if "depends" in between_text or "requires" in between_text or "built upon" in between_text:
-                            # A depends on B / A requires B -> B is prerequisite of A (B -> A)
                             if c1_pos < c2_pos:
                                 relationships.append({"from": c2, "to": c1, "type": "PREREQUISITE_OF"})
                             else:
                                 relationships.append({"from": c1, "to": c2, "type": "PREREQUISITE_OF"})
                         elif "prerequisite" in sent_low or "precedes" in between_text or "comes before" in between_text:
-                            # A is a prerequisite of B -> A is prerequisite of B (A -> B)
                             if c1_pos < c2_pos:
                                 relationships.append({"from": c1, "to": c2, "type": "PREREQUISITE_OF"})
                             else:
@@ -376,6 +520,19 @@ class LLMClient:
                                 relationships.append({"from": c1, "to": c2, "type": "USES_METHOD"})
                         else:
                             relationships.append({"from": c1, "to": c2, "type": "RELATED_TO"})
+                            
+        # Ensure all extracted concepts in the chunk are connected in a chain or tree
+        if len(sorted_concepts) > 1:
+            for i in range(1, len(sorted_concepts)):
+                c1 = sorted_concepts[i]["name"]
+                c2 = sorted_concepts[0]["name"]  # Connect back to the first concept (hub)
+                # Avoid duplicate relationship entries
+                if not any((r["from"].lower() == c2.lower() and r["to"].lower() == c1.lower()) or (r["from"].lower() == c1.lower() and r["to"].lower() == c2.lower()) for r in relationships):
+                    relationships.append({
+                        "from": c2,
+                        "to": c1,
+                        "type": "RELATED_TO"
+                    })
                             
         return {"nodes": nodes, "relationships": relationships}
 

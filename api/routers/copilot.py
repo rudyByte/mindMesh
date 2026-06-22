@@ -196,7 +196,11 @@ async def generate_live_stream(message: str, context: dict, history: list, user_
         f"You have access to the following graph-grounded context about the user's focus node:\n"
         f"==== GRAPH CONTEXT ====\n{node_context_str or 'No focus node currently selected.'}\n========================\n"
         f"Respond to the user's message. When making a claim, cite which graph relationship supports it (e.g. 'Linear Algebra is a prerequisite of Gradient Descent'). "
-        f"If the context doesn't contain enough information, state so clearly instead of hallucinating. Keep your explanation structured and concise."
+        f"If the context doesn't contain enough information, state so clearly instead of hallucinating. Keep your explanation structured and concise.\n\n"
+        f"CRITICAL FORMATTING RULES:\n"
+        f"1. Generate clean, natural, and friendly responses. Avoid raw markdown artifacts, technical delimiters, or JSON dumps.\n"
+        f"2. DO NOT mention internal filenames (such as 'test.pdf', 'MachineLearningTextbook.pdf', or any text matching '*.pdf') in your answers unless intentionally cited. Refer to them as 'the document' or by the formal paper title/author.\n"
+        f"3. Make the tone conversational, clean, and directly helpful without robotic structural prefixes."
     )
 
     try:
