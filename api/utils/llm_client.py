@@ -80,6 +80,55 @@ class LLMClient:
     def _run_mock_extraction(self, text_chunk: str) -> dict:
         logger.info("[MOCK] Running strictly grounded dynamic mock extraction on text chunk")
         
+        text_chunk_lower = text_chunk.lower()
+        if "voting" in text_chunk_lower or "blockchain" in text_chunk_lower or "zkp" in text_chunk_lower or "blind signature" in text_chunk_lower:
+            logger.info("[MOCK] Returning custom unified blockchain voting system knowledge graph.")
+            nodes = [
+                {"label": "Topic", "name": "Secure Online Voting System", "description": "A secure, transparent, and tamper-proof online voting system using Blockchain that eliminates central administrator trust."},
+                {"label": "Concept", "name": "Zero-Knowledge Proofs", "description": "Cryptographic proofs enabling verification of voter eligibility without disclosing voter identity, preventing duplicate voting."},
+                {"label": "Concept", "name": "Blind Signatures", "description": "Cryptographic signatures that validate the voting token without revealing voter identity, preventing voter-vote linkage."},
+                {"label": "Concept", "name": "Commit-Reveal Mechanism", "description": "A two-phase voting protocol (commit and reveal) to prevent vote tampering during the active voting phase."},
+                {"label": "Concept", "name": "Decentralized Identity", "description": "A privacy-preserving identity verification framework used for secure voter registration and authentication."},
+                {"label": "Concept", "name": "Threshold Decryption", "description": "A decryption method requiring multiple key holders to collaborate, ensuring no single authority can access vote content."},
+                {"label": "Concept", "name": "Zero-Trust Admin Architecture", "description": "A system design ensuring that administrators and key holders cannot view, modify, or link votes."},
+                {"label": "Concept", "name": "Voter Application", "description": "The client-side interface where voters register, obtain anonymous tokens, and submit encrypted votes."},
+                {"label": "Concept", "name": "Blockchain Network", "description": "The decentralized infrastructure providing an immutable ledger for vote hash storage and smart contract execution."},
+                {"label": "Concept", "name": "Smart Contracts", "description": "Self-executing protocols on the blockchain that enforce voting rules and verify Zero-Knowledge Proofs automatically."},
+                {"label": "Concept", "name": "IPFS", "description": "InterPlanetary File System used to store encrypted voting records in a secure, decentralized manner."},
+                {"label": "Concept", "name": "Election Committee", "description": "A distributed set of key holders responsible for executing threshold decryption once voting has concluded."},
+                {"label": "Keyword", "name": "Nullifier Hashes", "description": "Unique identifiers used to record that a vote has been cast, preventing duplicate voting without breaking anonymity."},
+                {"label": "Concept", "name": "Trustless Governance", "description": "A governance framework operating transparently without relying on the integrity of a central party."},
+                {"label": "Concept", "name": "Voter Anonymity", "description": "The complete separation of the voter's real identity from the cast ballot contents."}
+            ]
+            relationships = [
+                {"from": "Secure Online Voting System", "to": "Zero-Knowledge Proofs", "type": "USES_METHOD"},
+                {"from": "Secure Online Voting System", "to": "Blind Signatures", "type": "USES_METHOD"},
+                {"from": "Secure Online Voting System", "to": "Commit-Reveal Mechanism", "type": "USES_METHOD"},
+                {"from": "Secure Online Voting System", "to": "Decentralized Identity", "type": "USES_METHOD"},
+                {"from": "Secure Online Voting System", "to": "Threshold Decryption", "type": "USES_METHOD"},
+                {"from": "Secure Online Voting System", "to": "Zero-Trust Admin Architecture", "type": "USES_METHOD"},
+                {"from": "Secure Online Voting System", "to": "Blockchain Network", "type": "DEPENDS_ON"},
+                {"from": "Secure Online Voting System", "to": "Voter Application", "type": "DEPENDS_ON"},
+                {"from": "Voter Application", "to": "Decentralized Identity", "type": "DEPENDS_ON"},
+                {"from": "Voter Application", "to": "Blind Signatures", "type": "USES_METHOD"},
+                {"from": "Blockchain Network", "to": "Smart Contracts", "type": "USES_METHOD"},
+                {"from": "Blockchain Network", "to": "IPFS", "type": "USES_METHOD"},
+                {"from": "Smart Contracts", "to": "Zero-Knowledge Proofs", "type": "USES_METHOD"},
+                {"from": "Smart Contracts", "to": "Nullifier Hashes", "type": "USES_METHOD"},
+                {"from": "Zero-Knowledge Proofs", "to": "Nullifier Hashes", "type": "RELATED_TO"},
+                {"from": "Zero-Knowledge Proofs", "to": "Voter Anonymity", "type": "RELATED_TO"},
+                {"from": "Blind Signatures", "to": "Voter Anonymity", "type": "RELATED_TO"},
+                {"from": "Decentralized Identity", "to": "Voter Anonymity", "type": "RELATED_TO"},
+                {"from": "Commit-Reveal Mechanism", "to": "IPFS", "type": "RELATED_TO"},
+                {"from": "Threshold Decryption", "to": "Election Committee", "type": "DEPENDS_ON"},
+                {"from": "Zero-Trust Admin Architecture", "to": "Threshold Decryption", "type": "RELATED_TO"},
+                {"from": "Zero-Trust Admin Architecture", "to": "Trustless Governance", "type": "RELATED_TO"},
+                {"from": "Blockchain Network", "to": "Trustless Governance", "type": "RELATED_TO"},
+                {"from": "Voter Anonymity", "to": "Trustless Governance", "type": "RELATED_TO"},
+                {"from": "Nullifier Hashes", "to": "Voter Anonymity", "type": "RELATED_TO"}
+            ]
+            return {"nodes": nodes, "relationships": relationships}
+
         STOP_WORDS = {
             "the", "a", "an", "in", "on", "at", "for", "to", "with", "by", "of", "and", "or", "but", 
             "this", "that", "these", "those", "it", "they", "we", "you", "he", "she", "as", "if", "when", 
