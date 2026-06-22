@@ -4,7 +4,12 @@ from pypdf import PdfReader
 
 def main():
     root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    pdf_path = os.path.join(root_dir, "mock_storage", "documents", "e1d93ab9-4d63-4605-96c3-42f512542926_test.pdf")
+    doc_dir = os.path.join(root_dir, "mock_storage", "documents")
+    pdf_files = [f for f in os.listdir(doc_dir) if f.endswith(".pdf")]
+    if not pdf_files:
+        print("Error: No PDF files found in mock_storage/documents.")
+        return
+    pdf_path = os.path.join(doc_dir, pdf_files[0])
     output_path = os.path.join(root_dir, "api", "scratch", "extracted_paper_text.txt")
     
     if not os.path.exists(pdf_path):
