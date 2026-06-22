@@ -29,7 +29,10 @@ class LLMClient:
             return self._run_mock_extraction(text_chunk)
             
         system_prompt = (
-            "You are a knowledge graph extraction engine. Given a text chunk, extract ONLY these node types: "
+            "You are a strict, grounded knowledge graph extraction engine. Given a text chunk, extract ONLY concepts, topics, papers, authors, or institutions that are EXPLICITLY mentioned in the text chunk. "
+            "Do NOT include any external knowledge, assumptions, or information not directly written in the text. "
+            "Do NOT assume or extrapolate prerequisite relationships unless they are explicitly described or logically necessary and stated in the text. "
+            "Extract ONLY these node types if explicitly present: "
             "Concept, Topic, Keyword, Paper, Author, Institution. Extract ONLY these relationship types: "
             "PREREQUISITE_OF, RELATED_TO, EXTENDS, CONTRADICTS, USES_METHOD, DEPENDS_ON, CITES, AUTHORED_BY, "
             "AFFILIATED_WITH, MENTIONS, HAS_KEYWORD. Return ONLY valid JSON matching this schema, no prose, "
@@ -42,9 +45,7 @@ class LLMClient:
             "    {\"from\": \"Linear Algebra\", \"to\": \"Neural Networks\", \"type\": \"PREREQUISITE_OF\"}\n"
             "  ]\n"
             "}\n"
-            "If the text is a research paper excerpt, prioritize Paper/Author/Citation extraction. If it is "
-            "educational/textbook content, prioritize Concept/Topic extraction with PREREQUISITE_OF relationships "
-            "reflecting genuine learning dependency order."
+            "Strict grounding constraint: The extracted nodes and relationships MUST reside strictly within the bounds of the provided text. Do not invent concepts or reference external context not present in the text."
         )
         
         try:
@@ -77,89 +78,135 @@ class LLMClient:
             raise e
 
     def _run_mock_extraction(self, text_chunk: str) -> dict:
-        logger.info("[MOCK] Running mock extraction on text chunk")
+        logger.info("[MOCK] Running strictly grounded dynamic mock extraction on text chunk")
         
+        STOP_WORDS = {
+            "the", "a", "an", "in", "on", "at", "for", "to", "with", "by", "of", "and", "or", "but", 
+            "this", "that", "these", "those", "it", "they", "we", "you", "he", "she", "as", "if", "when", 
+            "is", "are", "was", "were", "been", "have", "has", "had", "do", "does", "did", "can", "could", 
+            "should", "would", "will", "from", "through", "during", "before", "after", "under", "over", 
+            "between", "among", "chapter", "section", "however", "therefore", "although", "furthermore",
+            "thus", "so", "also", "then", "there", "their", "its", "our", "your", "my", "his", "her",
+            "i", "you", "he", "him", "his", "himself", "she", "her", "hers", "herself", "itself", 
+            "they", "them", "their", "theirs", "themselves", "what", "which", "who", "whom", "this", 
+            "that", "these", "those", "am", "is", "are", "was", "were", "be", "been", "being", 
+            "have", "has", "had", "having", "do", "does", "did", "doing", "a", "an", "the", "and", 
+            "but", "if", "or", "because", "as", "until", "while", "of", "at", "by", "for", "with", 
+            "about", "against", "between", "into", "through", "during", "before", "after", "above", 
+            "below", "to", "from", "up", "down", "in", "out", "on", "off", "over", "under", "again", 
+            "further", "then", "once"
+        }
+
         nodes = []
         relationships = []
-        chunk_lower = text_chunk.lower()
         
-        # Check for IoT topics
-        has_edge = "edge computing" in chunk_lower or "edge" in chunk_lower
-        has_fog = "fog computing" in chunk_lower or "fog" in chunk_lower
-        has_5g = "5g" in chunk_lower
-        has_iomt = "iomt" in chunk_lower or "medical" in chunk_lower
-        has_iiot = "iiot" in chunk_lower or "industrial" in chunk_lower
-        has_smart_cities = "smart cities" in chunk_lower or "smart city" in chunk_lower
-        has_challenges = "challenges" in chunk_lower or "challenge" in chunk_lower
-        has_iot = "iot" in chunk_lower or "internet of things" in chunk_lower
+        # Split text chunk into sentences
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+|\n+', text_chunk) if s.strip()]
         
-        # Check for Machine Learning topics
-        has_attention = "attention" in chunk_lower or "query" in chunk_lower or "key" in chunk_lower
-        has_transformers = "transformer" in chunk_lower or "attention" in chunk_lower or "attention is all you need" in chunk_lower
-        has_neural_net = "neural network" in chunk_lower or "neuron" in chunk_lower or "backpropagation" in chunk_lower
-        has_gradient = "gradient" in chunk_lower or "optimization" in chunk_lower or "descent" in chunk_lower
-        has_linear_algebra = "matrix" in chunk_lower or "vector" in chunk_lower or "linear" in chunk_lower
+        concepts_map = {}
         
-        # IoT Ingestion mock path
-        if has_iot or has_edge or has_fog or has_5g or has_iomt or has_iiot or has_smart_cities or has_challenges:
-            nodes.append({"label": "Concept", "name": "Internet of Things", "description": "A network of interrelated devices embedded with electronics, software, and sensors."})
-            
-            if has_edge:
-                nodes.append({"label": "Concept", "name": "Edge Computing", "description": "Distributed computing paradigm bringing computation and data storage closer to data sources."})
-                relationships.append({"from": "Edge Computing", "to": "Internet of Things", "type": "RELATED_TO"})
-            
-            if has_fog:
-                nodes.append({"label": "Concept", "name": "Fog Computing", "description": "Decentralized computing structure extending cloud services to the edge of the network."})
-                relationships.append({"from": "Fog Computing", "to": "Edge Computing", "type": "EXTENDS"})
+        # 1. Extract Capitalized Candidate Phrases
+        for sent in sentences:
+            # Find sequences of capitalized words
+            matches = re.findall(r'\b([A-Z][a-zA-Z0-9\'-]*(?:\s+[A-Z][a-zA-Z0-9\'-]*)*)\b', sent)
+            for phrase in matches:
+                phrase_clean = phrase.strip()
+                phrase_low = phrase_clean.lower()
                 
-            if has_5g:
-                nodes.append({"label": "Concept", "name": "5G for IoT", "description": "Fifth-generation cellular network technology providing high speed and low latency for connected devices."})
-                relationships.append({"from": "5G for IoT", "to": "Internet of Things", "type": "PREREQUISITE_OF"})
+                # Filter out stopwords or single letter names
+                if phrase_low in STOP_WORDS or len(phrase_clean) < 3:
+                    continue
                 
-            if has_iomt:
-                nodes.append({"label": "Concept", "name": "IoMT", "description": "Internet of Medical Things, connecting medical devices and applications to healthcare IT systems."})
-                relationships.append({"from": "IoMT", "to": "Internet of Things", "type": "EXTENDS"})
-                
-            if has_iiot:
-                nodes.append({"label": "Concept", "name": "IIoT", "description": "Industrial Internet of Things, utilizing smart sensors and actuators to enhance manufacturing and industrial processes."})
-                relationships.append({"from": "IIoT", "to": "Internet of Things", "type": "EXTENDS"})
-                
-            if has_smart_cities:
-                nodes.append({"label": "Concept", "name": "Smart Cities", "description": "Urban areas using IoT sensors and technology to manage assets, resources, and services efficiently."})
-                relationships.append({"from": "Internet of Things", "to": "Smart Cities", "type": "PREREQUISITE_OF"})
-                
-            if has_challenges:
-                nodes.append({"label": "Concept", "name": "IoT Challenges", "description": "Security, privacy, scalability, interoperability, and power consumption issues in IoT systems."})
-                relationships.append({"from": "Internet of Things", "to": "IoT Challenges", "type": "RELATED_TO"})
-        
-        # Machine Learning mock path (only check if no IoT keywords matched to prevent contamination)
-        else:
-            if has_attention or has_transformers:
-                nodes.append({"label": "Concept", "name": "Transformers", "description": "Deep learning model architecture using self-attention."})
-                nodes.append({"label": "Concept", "name": "Self-attention", "description": "An attention mechanism scaling connections within a single sequence."})
-                nodes.append({"label": "Concept", "name": "Deep Learning", "description": "Multi-layered neural network representation learning."})
-                relationships.append({"from": "Self-attention", "to": "Transformers", "type": "PREREQUISITE_OF"})
-                relationships.append({"from": "Deep Learning", "to": "Transformers", "type": "RELATED_TO"})
-                
-            if has_neural_net:
-                nodes.append({"label": "Concept", "name": "Neural Networks", "description": "Layered computational graph nodes resembling biological neurons."})
-                nodes.append({"label": "Concept", "name": "Backpropagation", "description": "Reverse pass chain rule gradients computation."})
-                relationships.append({"from": "Backpropagation", "to": "Neural Networks", "type": "USES_METHOD"})
-                
-            if has_gradient:
-                nodes.append({"label": "Concept", "name": "Gradient Descent", "description": "First-order optimization to minimize loss function parameters."})
-                nodes.append({"label": "Concept", "name": "Loss Function", "description": "Error quantification metric for output matching."})
-                relationships.append({"from": "Gradient Descent", "to": "Neural Networks", "type": "PREREQUISITE_OF"})
-                
-            if has_linear_algebra:
-                nodes.append({"label": "Concept", "name": "Linear Algebra", "description": "Math studying systems of equations, spaces, vectors, and matrices."})
-                relationships.append({"from": "Linear Algebra", "to": "Gradient Descent", "type": "PREREQUISITE_OF"})
-                
-            if not nodes:
-                nodes.append({"label": "Concept", "name": "Artificial Intelligence", "description": "Machine-based cognitive simulation."})
-                nodes.append({"label": "Concept", "name": "Machine Learning", "description": "Experience-driven statistical algorithms optimization."})
-                relationships.append({"from": "Machine Learning", "to": "Artificial Intelligence", "type": "PREREQUISITE_OF"})
+                # Deduplicate and create candidate node
+                if phrase_low not in concepts_map:
+                    # Dynamically determine Label
+                    label = "Concept"
+                    if any(x in phrase_clean for x in ["University", "Institute", "Research", "Lab", "Company", "Google", "Microsoft"]):
+                        label = "Institution"
+                    elif phrase_clean.startswith("Chapter") or phrase_clean.startswith("Section"):
+                        label = "Topic"
+                    
+                    # Try to extract a definition from the sentence
+                    description = ""
+                    def_match = re.search(
+                        rf"\b{re.escape(phrase_clean)}\b\s+(?:is\s+defined\s+as|refers\s+to|represents|denotes|means|is\s+an?|is|are|were|was)\s+([^.!?\n]{5,150})", 
+                        sent, 
+                        re.IGNORECASE
+                    )
+                    if def_match:
+                        description = def_match.group(1).strip()
+                        # Capitalize first letter
+                        if description:
+                            description = description[0].upper() + description[1:]
+                    else:
+                        # Fallback: clean the sentence containing the concept as description
+                        description = sent
+                        if len(description) > 120:
+                            description = description[:117] + "..."
+                            
+                    concepts_map[phrase_low] = {
+                        "label": label,
+                        "name": phrase_clean,
+                        "description": description
+                    }
 
+        # Cap dynamic concept count to 15 per chunk to avoid rendering messy graphs
+        sorted_concepts = list(concepts_map.values())[:15]
+        nodes.extend(sorted_concepts)
+        
+        # Update concepts_map to only contain the kept concepts
+        concepts_map = {n["name"].lower(): n for n in sorted_concepts}
+
+        # 2. Extract Relationships
+        for sent in sentences:
+            sent_low = sent.lower()
+            present_concepts = []
+            for norm_name, node in concepts_map.items():
+                if re.search(rf"\b{re.escape(node['name'])}\b", sent, re.IGNORECASE):
+                    present_concepts.append(node['name'])
+            
+            if len(present_concepts) >= 2:
+                # Link pairs of concepts present in the same sentence
+                for i in range(len(present_concepts) - 1):
+                    for j in range(i + 1, len(present_concepts)):
+                        c1 = present_concepts[i]
+                        c2 = present_concepts[j]
+                        
+                        c1_pos = sent_low.find(c1.lower())
+                        c2_pos = sent_low.find(c2.lower())
+                        
+                        start_pos = min(c1_pos, c2_pos) + (len(c1) if c1_pos < c2_pos else len(c2))
+                        end_pos = max(c1_pos, c2_pos)
+                        between_text = sent_low[start_pos:end_pos]
+                        
+                        rel_type = "RELATED_TO"
+                        if "depends" in between_text or "requires" in between_text or "built upon" in between_text:
+                            # A depends on B / A requires B -> B is prerequisite of A (B -> A)
+                            if c1_pos < c2_pos:
+                                relationships.append({"from": c2, "to": c1, "type": "PREREQUISITE_OF"})
+                            else:
+                                relationships.append({"from": c1, "to": c2, "type": "PREREQUISITE_OF"})
+                        elif "prerequisite" in sent_low or "precedes" in between_text or "comes before" in between_text:
+                            # A is a prerequisite of B -> A is prerequisite of B (A -> B)
+                            if c1_pos < c2_pos:
+                                relationships.append({"from": c1, "to": c2, "type": "PREREQUISITE_OF"})
+                            else:
+                                relationships.append({"from": c2, "to": c1, "type": "PREREQUISITE_OF"})
+                        elif "extends" in between_text or "generalizes" in between_text or "is a type of" in between_text:
+                            if c1_pos < c2_pos:
+                                relationships.append({"from": c1, "to": c2, "type": "EXTENDS"})
+                            else:
+                                relationships.append({"from": c2, "to": c1, "type": "EXTENDS"})
+                        elif "contradicts" in between_text or "opposes" in between_text or "in contrast to" in between_text:
+                            relationships.append({"from": c1, "to": c2, "type": "CONTRADICTS"})
+                        elif "uses" in between_text or "utilizes" in between_text or "employs" in between_text:
+                            if c1_pos < c2_pos:
+                                relationships.append({"from": c2, "to": c1, "type": "USES_METHOD"})
+                            else:
+                                relationships.append({"from": c1, "to": c2, "type": "USES_METHOD"})
+                        else:
+                            relationships.append({"from": c1, "to": c2, "type": "RELATED_TO"})
+                            
         return {"nodes": nodes, "relationships": relationships}
 
     def narrate_learning_path(self, concepts: list) -> str:

@@ -81,6 +81,16 @@ class Neo4jClient:
     def _seed_mock_data(self):
         # Default mock concepts mirroring seed.cypher exactly
         self.mock_nodes = {
+            "doc-1": {
+                "id": "doc-1",
+                "label": "Document",
+                "title": "MachineLearningTextbook.pdf",
+                "type": "pdf",
+                "status": "done",
+                "progress_pct": 100,
+                "upload_date": "2026-06-22T04:12:10Z",
+                "storage_url": "mock-url"
+            },
             "c-linear-algebra": {"id": "c-linear-algebra", "label": "Concept", "name": "Linear Algebra", "description": "Vectors, matrices, linear transforms, and vector spaces.", "difficulty_level": "Beginner"},
             "c-calculus": {"id": "c-calculus", "label": "Concept", "name": "Calculus", "description": "Limits, derivatives, integrals, and approximation methods.", "difficulty_level": "Beginner"},
             "c-probability-stats": {"id": "c-probability-stats", "label": "Concept", "name": "Probability & Statistics", "description": "Random variables, distributions, Bayes rule, and estimations.", "difficulty_level": "Beginner"},
@@ -175,6 +185,15 @@ class Neo4jClient:
             # Affiliation
             {"from": "a-ashish-vaswani", "to": "inst-google", "type": "AFFILIATED_WITH"}
         ]
+        # Dynamically set doc_id and create CONTAINS edges for doc-1
+        for nid, node in list(self.mock_nodes.items()):
+            if nid != "doc-1":
+                node["doc_id"] = "doc-1"
+                self.mock_edges.append({
+                    "from": "doc-1",
+                    "to": nid,
+                    "type": "CONTAINS"
+                })
 
     def _run_mock_query(self, query: str, parameters: dict = None):
         query_upper = query.upper()

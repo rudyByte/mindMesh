@@ -110,12 +110,12 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
             
             # Neo4j query
             query = f"""
-            MERGE (n:{label} {{name: $name}})
+            MERGE (n:{label} {{name: $name, doc_id: $doc_id}})
             ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner'
             ON MATCH SET n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END
             RETURN n.id as node_id
             """
-            res = neo4j_client.run_query(query, {"name": name, "id": node_id, "description": desc})
+            res = neo4j_client.run_query(query, {"name": name, "id": node_id, "description": desc, "doc_id": doc_id})
             
             # Capture the resolved node ID (either the new one or the existing one)
             resolved_id = node_id
@@ -138,7 +138,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
                     "label": label,
                     "name": name,
                     "description": desc,
-                    "difficulty_level": "Beginner"
+                    "difficulty_level": "Beginner",
+                    "doc_id": doc_id
                 }
 
         # Write relationships to Neo4j
@@ -154,22 +155,23 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
                 rel_type = "RELATED_TO"
                 
             query = f"""
-            MATCH (a {{name: $from_name}})
-            MATCH (b {{name: $to_name}})
+            MATCH (a {{name: $from_name, doc_id: $doc_id}})
+            MATCH (b {{name: $to_name, doc_id: $doc_id}})
             MERGE (a)-[r:{rel_type}]->(b)
             """
-            neo4j_client.run_query(query, {"from_name": from_name, "to_name": to_name})
+            neo4j_client.run_query(query, {"from_name": from_name, "to_name": to_name, "doc_id": doc_id})
             
             # Also seed to mock store if in mock mode
             if neo4j_client.is_mock():
-                # Find matched nodes in mock
+                # Find matched nodes in mock for this document namespace
                 from_id = None
                 to_id = None
                 for nid, n in neo4j_client.mock_nodes.items():
-                    if n.get("name", "").lower() == from_name.lower():
-                        from_id = nid
-                    if n.get("name", "").lower() == to_name.lower():
-                        to_id = nid
+                    if n.get("doc_id") == doc_id:
+                        if n.get("name", "").lower() == from_name.lower():
+                            from_id = nid
+                        if n.get("name", "").lower() == to_name.lower():
+                            to_id = nid
                 if from_id and to_id:
                     neo4j_client.mock_edges.append({
                         "from": from_id,
@@ -202,11 +204,21 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
         raise HTTPException(status_code=400, detail="Only PDF documents are supported.")
         
     try:
-        # Clear old graph data (Neo4j and mock data) before starting ingestion
+        # Clear all cached data, previous uploads, embeddings, vector-store entries, and session memory
+        extraction_status_cache.clear()
+        
+        # Clear files from storage
+        try:
+            supabase_client.clear_bucket("documents")
+        except Exception as e:
+            logger.error(f"Failed to clear storage bucket: {e}")
+
         if neo4j_client.is_mock():
+            # Clear all mock nodes and edges from the mock database
             neo4j_client.mock_nodes.clear()
             neo4j_client.mock_edges.clear()
         else:
+            # Delete all nodes and relationships in the Neo4j database
             neo4j_client.run_query("MATCH (n) DETACH DELETE n")
 
         # Read file bytes
@@ -348,40 +360,5 @@ def get_document_text(id: str):
             text += page.extract_text() or ""
         return {"text": text}
     except Exception as e:
-        logger.warning(f"Failed to fetch real PDF bytes: {e}. Returning simulated textbook text.")
-        doc_title = res[0].get("title", "").lower() if res else ""
-        if any(k in doc_title for k in ["iot", "internet of things", "edge", "fog", "5g", "iomt", "iiot", "smart"]):
-            mock_text = (
-                "Chapter 1: Introduction to Internet of Things (IoT)\n\n"
-                "The Internet of Things (IoT) refers to a network of physical devices, vehicles, home appliances, "
-                "and other items embedded with electronics, software, sensors, actuators, and connectivity. "
-                "Edge Computing plays a vital role in IoT systems by bringing computation and data storage closer "
-                "to the devices where it is gathered, rather than relying on a central cloud.\n\n"
-                "Section 1.2: Fog Computing and 5G\n"
-                "Fog Computing extends cloud computing and services to the edge of an enterprise's network. "
-                "It distributes computation, communication, and storage resources closer to the devices. "
-                "The integration of 5G for IoT provides the high speed, low latency, and massive device connectivity "
-                "needed for real-time applications.\n\n"
-                "Section 1.3: Smart Cities and IoT Challenges\n"
-                "Smart Cities leverage IoT devices and sensors to optimize urban services and infrastructure, "
-                "improving efficiency and quality of life. However, deploying IoT at scale introduces significant "
-                "IoT Challenges, including security vulnerabilities, privacy concerns, interoperability issues, "
-                "and massive power consumption requirements."
-            )
-        else:
-            mock_text = (
-                "Chapter 1: Neural Networks and Deep Learning\n\n"
-                "Artificial Neural Networks are computational models inspired by biological neural architectures. "
-                "They consist of interconnected neurons arranged in layers: Input layer, Hidden layers, and Output layer. "
-                "In modern machine learning, Linear Algebra plays a vital role. Vector dot products map inputs to activations, "
-                "while matrices represent weights of the synapses.\n\n"
-                "Section 1.2: Optimization and Gradient Descent\n"
-                "To train a neural network, we must minimize its error, quantified by a Loss Function. "
-                "Gradient Descent is the optimization algorithm used to iteratively compute gradients of this loss function. "
-                "By updating parameters in the reverse direction of the gradient, the model converges to a local minimum.\n\n"
-                "Section 1.3: Self-Attention and Transformers\n"
-                "Self-attention denotes the mechanism where a model scales relationships within a single sequence. "
-                "Transformers, introduced in 'Attention Is All You Need', leverage self-attention to parse language contexts. "
-                "They have revolutionized modern Artificial Intelligence and Natural Language Processing."
-            )
-        return {"text": mock_text}
+        logger.error(f"Failed to fetch or parse PDF bytes for document {id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch or parse document text: {str(e)}")

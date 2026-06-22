@@ -61,4 +61,31 @@ class SupabaseClientWrapper:
             logger.error(f"Failed to download file from Supabase: {e}")
             raise e
 
+    def clear_bucket(self, bucket: str):
+        if self._is_mock:
+            root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            mock_dir = os.path.join(root_dir, "mock_storage", bucket)
+            if os.path.exists(mock_dir):
+                for f in os.listdir(mock_dir):
+                    file_path = os.path.join(mock_dir, f)
+                    try:
+                        if os.path.isfile(file_path):
+                            os.unlink(file_path)
+                    except Exception as e:
+                        logger.error(f"Failed to delete mock file {file_path}: {e}")
+            return
+            
+        try:
+            # List all files in the bucket
+            res = self._client.storage.from_(bucket).list(options={"limit": 100})
+            if res:
+                file_names = [item["name"] for item in res if item.get("name") != ".emptyFolderPlaceholder"]
+                if file_names:
+                    # Remove the files
+                    self._client.storage.from_(bucket).remove(file_names)
+                    logger.info(f"Successfully cleared files from Supabase bucket '{bucket}': {file_names}")
+        except Exception as e:
+            logger.error(f"Failed to clear Supabase bucket '{bucket}': {e}")
+
 supabase_client = SupabaseClientWrapper()
+

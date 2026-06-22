@@ -62,8 +62,22 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
       return;
     }
 
-    // Clear old graph data and document queue before starting ingestion
-    useStore.setState({ nodes: [], edges: [], documents: [] });
+    // Clear all cached data, previous uploads, and session memory
+    useStore.setState({
+      nodes: [],
+      edges: [],
+      selectedNode: null,
+      chatMessages: [],
+      chatLoading: false,
+      activeDocumentId: null,
+      documents: [],
+      documentText: null,
+      notes: [],
+      highlights: [],
+      citations: [],
+      activePathNodeIds: [],
+      learningPathNarration: null
+    });
 
     setFileName(file.name);
     setUploadState('uploading');
