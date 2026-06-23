@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useStore, GraphNode, GraphEdge } from '../store/useStore';
+import { API_BASE_URL } from '../lib/api';
 import { Layers, Compass, Loader2 } from 'lucide-react';
 import { forceCollide } from 'd3-force';
 
@@ -93,7 +94,7 @@ export default function GraphCanvas() {
       setLoading(true);
       try {
         // Query list of all nodes to display a default set if no document is uploaded
-        const response = await fetch('http://localhost:8000/documents/doc-1/graph');
+        const response = await fetch(`${API_BASE_URL}/documents/doc-1/graph`);
         if (response.ok) {
           const data = await response.json();
           setGraphData(data);
@@ -180,7 +181,7 @@ export default function GraphCanvas() {
 
     try {
       // Fetch dynamic node expansion
-      const url = `http://localhost:8000/graph/expand?node_id=${node.id}&depth=${graphDepth}&mode=${graphMode}`;
+      const url = `${API_BASE_URL}/graph/expand?node_id=${node.id}&depth=${graphDepth}&mode=${graphMode}`;
       const response = await fetch(url);
       if (response.ok) {
         const expandedData = await response.json();

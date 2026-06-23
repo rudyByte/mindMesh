@@ -7,6 +7,8 @@ import { LeftSidebar, RightSidebar, BottomPanel } from '../components/Panels';
 import GraphCanvas from '../components/GraphCanvas';
 import UploadModal from '../components/UploadModal';
 import { ErrorBoundary } from '../components/ErrorBoundary';
+import { ConnectionBanner } from '../components/ConnectionBanner';
+import { API_BASE_URL } from '../lib/api';
 import { FileText, Map as MapIcon, Sparkles } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -41,7 +43,7 @@ export default function DashboardPage() {
 
     const fetchDocumentText = async () => {
       try {
-        const response = await fetch(`http://localhost:8000/documents/${activeDocumentId}/text`);
+        const response = await fetch(`${API_BASE_URL}/documents/${activeDocumentId}/text`);
         if (response.ok) {
           const data = await response.json();
           setDocumentText(data.text);
@@ -77,7 +79,7 @@ export default function DashboardPage() {
     if (!selectedText || !activeDocumentId) return;
 
     try {
-      const response = await fetch('http://localhost:8000/highlights', {
+      const response = await fetch(`${API_BASE_URL}/highlights`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -107,7 +109,7 @@ export default function DashboardPage() {
         setPopoverCoords(null);
 
         // Fetch and load updated document graph elements to canvas
-        const graphResponse = await fetch(`http://localhost:8000/documents/${activeDocumentId}/graph`);
+        const graphResponse = await fetch(`${API_BASE_URL}/documents/${activeDocumentId}/graph`);
         if (graphResponse.ok) {
           const graphData = await graphResponse.json();
           useStore.getState().appendGraphData(graphData);
@@ -129,7 +131,9 @@ export default function DashboardPage() {
   const activeDocTitle = documents.find(d => d.id === activeDocumentId)?.title || 'Document';
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#070b13] select-none text-slate-200">
+    <>
+      <ConnectionBanner />
+      <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#070b13] select-none text-slate-200">
       {/* 3-Pane workspace layout */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left side controller navigation */}
@@ -230,5 +234,6 @@ export default function DashboardPage() {
       {/* Document ingestion Modal popover */}
       <UploadModal isOpen={isUploadOpen} onClose={() => setIsUploadOpen(false)} />
     </div>
+    </>
   );
 }

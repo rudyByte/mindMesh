@@ -6,9 +6,9 @@ from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 from pypdf import PdfReader
 
-from api.utils.neo4j_client import neo4j_client
-from api.utils.supabase_client import supabase_client
-from api.utils.llm_client import llm_client
+from utils.neo4j_client import neo4j_client
+from utils.supabase_client import supabase_client
+from utils.llm_client import llm_client
 
 router = APIRouter()
 logger = logging.getLogger("documents_router")

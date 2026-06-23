@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useStore, GraphNode } from '../store/useStore';
+import { API_BASE_URL } from '../lib/api';
 import { 
   FileText, Plus, Database, Cpu, HelpCircle, 
   Map, Sparkles, BookOpen, GraduationCap, 
@@ -49,7 +50,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   useEffect(() => {
     const fetchHealth = async () => {
       try {
-        const response = await fetch('http://localhost:8000/health/deep');
+        const response = await fetch(`${API_BASE_URL}/health/deep`);
         if (response.ok) {
           const data = await response.json();
           setHealthStatus(data.services);
@@ -68,7 +69,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   useEffect(() => {
     const fetchNotes = async () => {
       try {
-        const response = await fetch('http://localhost:8000/notes');
+        const response = await fetch(`${API_BASE_URL}/notes`);
         if (response.ok) {
           const data = await response.json();
           setNotes(data);
@@ -85,7 +86,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
     const fetchCitations = async () => {
       setCitationsLoading(true);
       try {
-        const response = await fetch('http://localhost:8000/citations');
+        const response = await fetch(`${API_BASE_URL}/citations`);
         if (response.ok) {
           const data = await response.json();
           setCitations(data);
@@ -102,7 +103,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const handleDocumentSelect = async (docId: string) => {
     setActiveDocumentId(docId);
     try {
-      const response = await fetch(`http://localhost:8000/documents/${docId}/graph`);
+      const response = await fetch(`${API_BASE_URL}/documents/${docId}/graph`);
       if (response.ok) {
         const data = await response.json();
         setGraphData(data);
@@ -117,8 +118,8 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
     setNoteSearch(q);
     try {
       const url = q.trim()
-        ? `http://localhost:8000/notes/search?q=${encodeURIComponent(q)}`
-        : 'http://localhost:8000/notes';
+        ? `${API_BASE_URL}/notes/search?q=${encodeURIComponent(q)}`
+        : `${API_BASE_URL}/notes`;
       const response = await fetch(url);
       if (response.ok) {
         const data = await response.json();
@@ -133,7 +134,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
     if (!noteInput.trim()) return;
     setNoteSubmitLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/notes', {
+      const response = await fetch(`${API_BASE_URL}/notes`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -455,7 +456,7 @@ export function RightSidebar() {
     if (!selectedNode || selectedNode.label !== 'Paper') return;
     setCitationSaving(true);
     try {
-      const response = await fetch('http://localhost:8000/citations', {
+      const response = await fetch(`${API_BASE_URL}/citations`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -480,7 +481,7 @@ export function RightSidebar() {
     if (!selectedNode || selectedNode.label !== 'Concept') return;
     setPathGenerating(true);
     try {
-      const response = await fetch(`http://localhost:8000/learning-path?target=${selectedNode.id}`);
+      const response = await fetch(`${API_BASE_URL}/learning-path?target=${selectedNode.id}`);
       if (response.ok) {
         const data = await response.json();
         appendGraphData({ nodes: data.nodes, edges: data.edges });
@@ -525,7 +526,7 @@ export function RightSidebar() {
     const fetchContext = async () => {
       setContextLoading(true);
       try {
-        const response = await fetch('http://localhost:8000/copilot/context', {
+        const response = await fetch(`${API_BASE_URL}/copilot/context`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -559,7 +560,7 @@ export function RightSidebar() {
     addChatMessage({ role: 'assistant' as const, content: '' });
 
     try {
-      const response = await fetch('http://localhost:8000/copilot/chat', {
+      const response = await fetch(`${API_BASE_URL}/copilot/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -997,7 +998,7 @@ export function BottomPanel() {
   useEffect(() => {
     const fetchHighlights = async () => {
       try {
-        const response = await fetch('http://localhost:8000/highlights');
+        const response = await fetch(`${API_BASE_URL}/highlights`);
         if (response.ok) {
           const data = await response.json();
           setHighlights(data);
