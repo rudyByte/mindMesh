@@ -194,6 +194,7 @@ class Neo4jClient:
         ]
         # Dynamically set doc_id and create CONTAINS edges for doc-1
         for nid, node in list(self.mock_nodes.items()):
+            node["session_id"] = "session-1"
             if nid != "doc-1":
                 node["doc_id"] = "doc-1"
                 self.mock_edges.append({
@@ -317,13 +318,18 @@ class Neo4jClient:
                 depth = params.get("depth", 1)
                 mode = params.get("mode", "basic")
                 doc_id = params.get("doc_id") or params.get("document_id")
+                session_id = params.get("session_id")
                 
                 nodes_to_return = {}
                 edges_to_return = []
                 
-                # Retrieve valid node IDs for this document
+                # Retrieve valid node IDs for this document/session
                 doc_node_ids = set()
-                if doc_id:
+                if session_id:
+                    for nid, n in self.mock_nodes.items():
+                        if n.get("session_id") == session_id:
+                            doc_node_ids.add(nid)
+                elif doc_id:
                     if doc_id == "doc-1":
                         for nid, n in self.mock_nodes.items():
                             if n.get("label") != "Document":
@@ -391,11 +397,15 @@ class Neo4jClient:
             if "ID" in query_upper and "DOCUMENT" not in query_upper:
                 node_id = params.get("id") or params.get("node_id")
                 doc_id = params.get("doc_id") or params.get("document_id")
+                session_id = params.get("session_id")
                 if node_id and node_id in self.mock_nodes:
                     n = self.mock_nodes[node_id]
                     
-                    # Validate doc_id ownership in mock if doc_id/document_id is provided
-                    if doc_id:
+                    # Validate doc_id/session_id ownership in mock
+                    if session_id:
+                        if n.get("session_id") != session_id:
+                            return []
+                    elif doc_id:
                         is_valid = False
                         if doc_id == "doc-1":
                             is_valid = True

@@ -1,12 +1,17 @@
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from utils.neo4j_client import neo4j_client
 
 router = APIRouter()
 
 @router.get("/graph/node/{id}")
-def get_node_details(id: str, document_id: str = Query(..., description="Document ID to validate ownership")):
+def get_node_details(
+    id: str, 
+    document_id: Optional[str] = Query(None, description="Document ID to validate ownership"),
+    session_id: Optional[str] = Query(None, description="Session ID to validate ownership")
+):
     if neo4j_client.is_mock():
-        res = neo4j_client.run_query("MATCH (N {ID: $id})", {"id": id, "document_id": document_id})
+        res = neo4j_client.run_query("MATCH (N {ID: $id})", {"id": id, "document_id": document_id, "session_id": session_id})
         if res:
             record = res[0]
             return {
@@ -20,22 +25,37 @@ def get_node_details(id: str, document_id: str = Query(..., description="Documen
             }
         # Differentiate 403 vs 404 in mock mode
         if id in neo4j_client.mock_nodes:
-            raise HTTPException(status_code=403, detail="Access denied. Node does not belong to the specified document.")
+            if session_id:
+                raise HTTPException(status_code=403, detail="Access denied. Node does not belong to the specified session.")
+            else:
+                raise HTTPException(status_code=403, detail="Access denied. Node does not belong to the specified document.")
         raise HTTPException(status_code=404, detail="Node not found.")
 
-    # Real Neo4j Mode: query must verify that the Document contains the node
-    query = """
-    MATCH (d:Document {id: $doc_id})-[:CONTAINS]->(n {id: $id}) 
-    RETURN labels(n)[0] as label, n.id as id, n.name as name, n.description as description, 
-           n.difficulty_level as difficulty_level, n.title as title, n.year as year, n.doi as doi
-    """
-    res = neo4j_client.run_query(query, {"id": id, "doc_id": document_id})
+    # Real Neo4j Mode
+    if session_id:
+        query = """
+        MATCH (n {id: $id, session_id: $session_id}) 
+        RETURN labels(n)[0] as label, n.id as id, n.name as name, n.description as description, 
+               n.difficulty_level as difficulty_level, n.title as title, n.year as year, n.doi as doi
+        """
+        res = neo4j_client.run_query(query, {"id": id, "session_id": session_id})
+    else:
+        query = """
+        MATCH (d:Document {id: $doc_id})-[:CONTAINS]->(n {id: $id}) 
+        RETURN labels(n)[0] as label, n.id as id, n.name as name, n.description as description, 
+               n.difficulty_level as difficulty_level, n.title as title, n.year as year, n.doi as doi
+        """
+        res = neo4j_client.run_query(query, {"id": id, "doc_id": document_id})
+        
     if not res:
         # Check if the node exists globally to throw 403 instead of 404
         exists_query = "MATCH (n {id: $id}) RETURN n.id"
         exists_res = neo4j_client.run_query(exists_query, {"id": id})
         if exists_res:
-            raise HTTPException(status_code=403, detail="Access denied. Node does not belong to the specified document.")
+            if session_id:
+                raise HTTPException(status_code=403, detail="Access denied. Node does not belong to the specified session.")
+            else:
+                raise HTTPException(status_code=403, detail="Access denied. Node does not belong to the specified document.")
         else:
             raise HTTPException(status_code=404, detail="Node not found.")
             
@@ -56,34 +76,49 @@ def expand_graph(
     node_id: str = Query(..., description="ID of node to expand"),
     depth: int = Query(1, ge=1, le=3, description="Depth of path expansion"),
     mode: str = Query("basic", description="Expansion mode: basic (prerequisites) or advanced (related/extends)"),
-    document_id: str = Query(..., description="Document ID to validate ownership and restrict traversal")
+    document_id: Optional[str] = Query(None, description="Document ID to validate ownership and restrict traversal"),
+    session_id: Optional[str] = Query(None, description="Session ID to validate ownership and restrict traversal")
 ):
     if neo4j_client.is_mock():
-        res = neo4j_client.run_query("MATCH path", {"id": node_id, "depth": depth, "mode": mode, "document_id": document_id})
+        res = neo4j_client.run_query("MATCH path", {"id": node_id, "depth": depth, "mode": mode, "document_id": document_id, "session_id": session_id})
         if res:
-            # If target node exists but document_id filtering returned empty nodes because of mismatch
+            # If target node exists but document_id/session_id filtering returned empty nodes because of mismatch
             nodes = res[0].get("nodes", [])
             if not nodes:
                 # If target node exists globally in mock
                 if node_id in neo4j_client.mock_nodes:
-                    raise HTTPException(status_code=403, detail="Access denied. Target node does not belong to the specified document.")
+                    if session_id:
+                        raise HTTPException(status_code=403, detail="Access denied. Target node does not belong to the specified session.")
+                    else:
+                        raise HTTPException(status_code=403, detail="Access denied. Target node does not belong to the specified document.")
                 else:
                     raise HTTPException(status_code=404, detail="Target node not found.")
             return res[0]
         return {"nodes": [], "edges": []}
 
-    # 1. Verify target node belongs to document
-    target_query = """
-    MATCH (d:Document {id: $doc_id})-[:CONTAINS]->(target {id: $id})
-    RETURN labels(target)[0] as label, target.id as id, target.name as name, target.description as description, target.difficulty_level as difficulty_level
-    """
-    target_res = neo4j_client.run_query(target_query, {"id": node_id, "doc_id": document_id})
+    # 1. Verify target node belongs to document/session
+    if session_id:
+        target_query = """
+        MATCH (target {id: $id, session_id: $session_id})
+        RETURN labels(target)[0] as label, target.id as id, target.name as name, target.description as description, target.difficulty_level as difficulty_level
+        """
+        target_res = neo4j_client.run_query(target_query, {"id": node_id, "session_id": session_id})
+    else:
+        target_query = """
+        MATCH (d:Document {id: $doc_id})-[:CONTAINS]->(target {id: $id})
+        RETURN labels(target)[0] as label, target.id as id, target.name as name, target.description as description, target.difficulty_level as difficulty_level
+        """
+        target_res = neo4j_client.run_query(target_query, {"id": node_id, "doc_id": document_id})
+        
     if not target_res:
         # Check if the node exists globally
         exists_query = "MATCH (n {id: $id}) RETURN n.id"
         exists_res = neo4j_client.run_query(exists_query, {"id": node_id})
         if exists_res:
-            raise HTTPException(status_code=403, detail="Access denied. Target node does not belong to the specified document.")
+            if session_id:
+                raise HTTPException(status_code=403, detail="Access denied. Target node does not belong to the specified session.")
+            else:
+                raise HTTPException(status_code=403, detail="Access denied. Target node does not belong to the specified document.")
         else:
             raise HTTPException(status_code=404, detail="Target node not found.")
 
@@ -99,21 +134,35 @@ def expand_graph(
         "difficulty_level": t.get("difficulty_level", "Beginner")
     }
     
-    # 2. Query path expansion, enforcing that all traversed nodes are contained in the document
-    if mode == "basic":
-        cypher = """
-        MATCH (d:Document {id: $doc_id})
-        MATCH p=(target {id: $id})<-[:PREREQUISITE_OF*1..$depth]-(n)
-        WHERE ALL(x IN nodes(p) WHERE (d)-[:CONTAINS]->(x))
-        RETURN p
-        """
+    # 2. Query path expansion, enforcing that all traversed nodes are contained in the document/session
+    if session_id:
+        if mode == "basic":
+            cypher = """
+            MATCH p=(target {id: $id, session_id: $session_id})<-[:PREREQUISITE_OF*1..$depth]-(n)
+            WHERE ALL(x IN nodes(p) WHERE x.session_id = $session_id)
+            RETURN p
+            """
+        else:
+            cypher = """
+            MATCH p=(target {id: $id, session_id: $session_id})-[:EXTENDS|RELATED_TO*1..$depth]-(n)
+            WHERE ALL(x IN nodes(p) WHERE x.session_id = $session_id)
+            RETURN p
+            """
     else:
-        cypher = """
-        MATCH (d:Document {id: $doc_id})
-        MATCH p=(target {id: $id})-[:EXTENDS|RELATED_TO*1..$depth]-(n)
-        WHERE ALL(x IN nodes(p) WHERE (d)-[:CONTAINS]->(x))
-        RETURN p
-        """
+        if mode == "basic":
+            cypher = """
+            MATCH (d:Document {id: $doc_id})
+            MATCH p=(target {id: $id})<-[:PREREQUISITE_OF*1..$depth]-(n)
+            WHERE ALL(x IN nodes(p) WHERE (d)-[:CONTAINS]->(x))
+            RETURN p
+            """
+        else:
+            cypher = """
+            MATCH (d:Document {id: $doc_id})
+            MATCH p=(target {id: $id})-[:EXTENDS|RELATED_TO*1..$depth]-(n)
+            WHERE ALL(x IN nodes(p) WHERE (d)-[:CONTAINS]->(x))
+            RETURN p
+            """
         
     path_res = neo4j_client.run_query(cypher, {"id": node_id, "depth": depth, "doc_id": document_id})
     
@@ -158,14 +207,18 @@ def expand_graph(
 def get_shortest_path(
     from_id: str, 
     to_id: str,
-    document_id: str = Query(..., description="Document ID to validate ownership and restrict path")
+    document_id: Optional[str] = Query(None, description="Document ID to validate ownership and restrict path"),
+    session_id: Optional[str] = Query(None, description="Session ID to validate ownership and restrict path")
 ):
     if neo4j_client.is_mock():
-        res = neo4j_client.run_query("MATCH path", {"from_id": from_id, "to_id": to_id, "document_id": document_id})
-        # If either node doesn't belong to the document, run_query will filter them out or return empty
-        # Validate that both from_id and to_id exist in mock and belong to this document
+        res = neo4j_client.run_query("MATCH path", {"from_id": from_id, "to_id": to_id, "document_id": document_id, "session_id": session_id})
+        # If either node doesn't belong to the document/session, validate in mock
         doc_node_ids = set()
-        if document_id == "doc-1":
+        if session_id:
+            for nid, n in neo4j_client.mock_nodes.items():
+                if n.get("session_id") == session_id:
+                    doc_node_ids.add(nid)
+        elif document_id == "doc-1":
             for nid, n in neo4j_client.mock_nodes.items():
                 if n.get("label") != "Document":
                     doc_node_ids.add(nid)
@@ -178,34 +231,57 @@ def get_shortest_path(
                     doc_node_ids.add(nid)
 
         if from_id not in doc_node_ids or to_id not in doc_node_ids:
-            raise HTTPException(status_code=403, detail="Access denied. Nodes do not belong to the specified document.")
+            if session_id:
+                raise HTTPException(status_code=403, detail="Access denied. Nodes do not belong to the specified session.")
+            else:
+                raise HTTPException(status_code=403, detail="Access denied. Nodes do not belong to the specified document.")
 
         if res:
             return res[0]
         return {"nodes": [], "edges": []}
         
     # Real Neo4j Mode
-    query = """
-    MATCH (d:Document {id: $doc_id})
-    MATCH (start {id: $from_id}), (end {id: $to_id})
-    WHERE (d)-[:CONTAINS]->(start) AND (d)-[:CONTAINS]->(end)
-    MATCH p = shortestPath((start)-[*..10]-(end))
-    WHERE ALL(x IN nodes(p) WHERE (d)-[:CONTAINS]->(x))
-    RETURN p
-    """
-    res = neo4j_client.run_query(query, {"from_id": from_id, "to_id": to_id, "doc_id": document_id})
+    if session_id:
+        query = """
+        MATCH (start {id: $from_id, session_id: $session_id}), (end {id: $to_id, session_id: $session_id})
+        MATCH p = shortestPath((start)-[*..10]-(end))
+        WHERE ALL(x IN nodes(p) WHERE x.session_id = $session_id)
+        RETURN p
+        """
+        res = neo4j_client.run_query(query, {"from_id": from_id, "to_id": to_id, "session_id": session_id})
+    else:
+        query = """
+        MATCH (d:Document {id: $doc_id})
+        MATCH (start {id: $from_id}), (end {id: $to_id})
+        WHERE (d)-[:CONTAINS]->(start) AND (d)-[:CONTAINS]->(end)
+        MATCH p = shortestPath((start)-[*..10]-(end))
+        WHERE ALL(x IN nodes(p) WHERE (d)-[:CONTAINS]->(x))
+        RETURN p
+        """
+        res = neo4j_client.run_query(query, {"from_id": from_id, "to_id": to_id, "doc_id": document_id})
     
     # Validation if no path found but nodes exist to throw 403 vs 404
     if not res:
-        # Check if they exist in document
-        check_query = """
-        MATCH (d:Document {id: $doc_id})
-        MATCH (start {id: $from_id}), (end {id: $to_id})
-        RETURN (d)-[:CONTAINS]->(start) as start_ok, (d)-[:CONTAINS]->(end) as end_ok
-        """
-        check_res = neo4j_client.run_query(check_query, {"from_id": from_id, "to_id": to_id, "doc_id": document_id})
+        # Check if they exist in document/session
+        if session_id:
+            check_query = """
+            MATCH (start {id: $from_id}), (end {id: $to_id})
+            RETURN start.session_id = $session_id as start_ok, end.session_id = $session_id as end_ok
+            """
+            check_res = neo4j_client.run_query(check_query, {"from_id": from_id, "to_id": to_id, "session_id": session_id})
+        else:
+            check_query = """
+            MATCH (d:Document {id: $doc_id})
+            MATCH (start {id: $from_id}), (end {id: $to_id})
+            RETURN (d)-[:CONTAINS]->(start) as start_ok, (d)-[:CONTAINS]->(end) as end_ok
+            """
+            check_res = neo4j_client.run_query(check_query, {"from_id": from_id, "to_id": to_id, "doc_id": document_id})
+            
         if not check_res or not check_res[0]["start_ok"] or not check_res[0]["end_ok"]:
-            raise HTTPException(status_code=403, detail="Access denied. Nodes do not belong to the specified document.")
+            if session_id:
+                raise HTTPException(status_code=403, detail="Access denied. Nodes do not belong to the specified session.")
+            else:
+                raise HTTPException(status_code=403, detail="Access denied. Nodes do not belong to the specified document.")
 
     nodes_dict = {}
     edges_list = []

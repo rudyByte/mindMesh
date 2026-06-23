@@ -22,6 +22,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const setGraphData = useStore((state) => state.setGraphData);
   const setActiveDocumentId = useStore((state) => state.setActiveDocumentId);
   const setSelectedNode = useStore((state) => state.setSelectedNode);
+  const sessionId = useStore((state) => state.sessionId);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -92,7 +93,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
     formData.append('file', file);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/documents/upload`, {
+      const response = await fetch(`${API_BASE_URL}/documents/upload?session_id=${sessionId}`, {
         method: 'POST',
         body: formData,
       });
@@ -162,20 +163,28 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
           setGraphData({ nodes: [], edges: [] });
           
           // Fetch and load graph
-          const graphResponse = await fetch(`${API_BASE_URL}/documents/${docId}/graph`);
+          const graphUrl = sessionId
+            ? `${API_BASE_URL}/sessions/${sessionId}/graph`
+            : `${API_BASE_URL}/documents/${docId}/graph`;
+          const graphResponse = await fetch(graphUrl);
           if (graphResponse.ok) {
             const graphData = await graphResponse.json();
             
-            // Validate that no nodes from previous documents exist in graphData
-            const validatedNodes = (graphData.nodes || []).filter((node: any) => {
-              return !node.doc_id || node.doc_id === docId;
-            });
-            const validatedNodeIds = new Set(validatedNodes.map((n: any) => n.id));
-            const validatedEdges = (graphData.edges || []).filter((edge: any) => {
-              const fromId = typeof edge.source === 'object' ? edge.source.id : edge.source || edge.from;
-              const toId = typeof edge.target === 'object' ? edge.target.id : edge.target || edge.to;
-              return validatedNodeIds.has(fromId) && validatedNodeIds.has(toId);
-            });
+            let validatedNodes = graphData.nodes || [];
+            let validatedEdges = graphData.edges || [];
+
+            if (!sessionId) {
+              // Validate that no nodes from previous documents exist in graphData
+              validatedNodes = (graphData.nodes || []).filter((node: any) => {
+                return !node.doc_id || node.doc_id === docId;
+              });
+              const validatedNodeIds = new Set(validatedNodes.map((n: any) => n.id));
+              validatedEdges = (graphData.edges || []).filter((edge: any) => {
+                const fromId = typeof edge.source === 'object' ? edge.source.id : edge.source || edge.from;
+                const toId = typeof edge.target === 'object' ? edge.target.id : edge.target || edge.to;
+                return validatedNodeIds.has(fromId) && validatedNodeIds.has(toId);
+              });
+            }
 
             setGraphData({
               nodes: validatedNodes,

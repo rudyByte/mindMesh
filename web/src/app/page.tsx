@@ -24,6 +24,13 @@ export default function DashboardPage() {
   const documentText = useStore((state) => state.documentText);
   const setDocumentText = useStore((state) => state.setDocumentText);
   const addHighlight = useStore((state) => state.addHighlight);
+  const initSessions = useStore((state) => state.initSessions);
+  const sessionId = useStore((state) => state.sessionId);
+
+  // Initialize sessions on page mount
+  useEffect(() => {
+    initSessions();
+  }, [initSessions]);
 
   const [selectedText, setSelectedText] = useState('');
   const [popoverCoords, setPopoverCoords] = useState<{ x: number; y: number } | null>(null);
@@ -81,10 +88,10 @@ export default function DashboardPage() {
   };
 
   const handleSaveHighlight = async () => {
-    if (!selectedText || !activeDocumentId) return;
+    if (!selectedText || !activeDocumentId || !sessionId) return;
 
     try {
-      const response = await fetch(`${API_BASE_URL}/highlights`, {
+      const response = await fetch(`${API_BASE_URL}/highlights?session_id=${sessionId}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -114,7 +121,7 @@ export default function DashboardPage() {
         setPopoverCoords(null);
 
         // Fetch and load updated document graph elements to canvas
-        const graphResponse = await fetch(`${API_BASE_URL}/documents/${activeDocumentId}/graph`);
+        const graphResponse = await fetch(`${API_BASE_URL}/sessions/${sessionId}/graph`);
         if (graphResponse.ok) {
           const graphData = await graphResponse.json();
           useStore.getState().appendGraphData(graphData);

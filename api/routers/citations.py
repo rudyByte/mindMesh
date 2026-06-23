@@ -45,7 +45,7 @@ def format_citation_template(title: str, authors: list, year: int, doi_url: str,
         return f"{authors_formatted}. {paper_title} ({year_str})."
 
 @router.post("/citations")
-def create_citation(request: CitationCreate):
+def create_citation(request: CitationCreate, session_id: str = Query(...)):
     # Fetch Paper details
     query = """
     MATCH (p:Paper {id: $paper_id})
@@ -78,23 +78,24 @@ def create_citation(request: CitationCreate):
     
     # Save Citation node
     save_query = """
-    MERGE (c:Citation {id: $id})
+    MERGE (c:Citation {id: $id, session_id: $session_id})
     ON CREATE SET c.style = $style, c.formatted_text = $formatted_text
     RETURN c
     """
     neo4j_client.run_query(save_query, {
         "id": cit_id,
         "style": request.style,
-        "formatted_text": formatted
+        "formatted_text": formatted,
+        "session_id": session_id
     })
     
     # Link Citation to Paper
     link_query = """
-    MATCH (c:Citation {id: $cit_id})
+    MATCH (c:Citation {id: $cit_id, session_id: $session_id})
     MATCH (p:Paper {id: $paper_id})
     MERGE (c)-[:FOR_PAPER]->(p)
     """
-    neo4j_client.run_query(link_query, {"cit_id": cit_id, "paper_id": request.paper_id})
+    neo4j_client.run_query(link_query, {"cit_id": cit_id, "paper_id": request.paper_id, "session_id": session_id})
 
     # Save to mock database
     if neo4j_client.is_mock():
@@ -102,7 +103,8 @@ def create_citation(request: CitationCreate):
             "id": cit_id,
             "label": "Citation",
             "style": request.style,
-            "formatted_text": formatted
+            "formatted_text": formatted,
+            "session_id": session_id
         }
         neo4j_client.mock_edges.append({"from": cit_id, "to": request.paper_id, "type": "FOR_PAPER"})
 
@@ -114,11 +116,11 @@ def create_citation(request: CitationCreate):
     }
 
 @router.get("/citations")
-def get_citations(style: Optional[str] = Query(None)):
+def get_citations(style: Optional[str] = Query(None), session_id: str = Query(...)):
     if neo4j_client.is_mock():
         results = []
         for nid, node in neo4j_client.mock_nodes.items():
-            if node.get("label") == "Citation":
+            if node.get("label") == "Citation" and node.get("session_id") == session_id:
                 if style and node.get("style", "").upper() != style.upper():
                     continue
                     
@@ -140,16 +142,16 @@ def get_citations(style: Optional[str] = Query(None)):
 
     if style:
         query = """
-        MATCH (c:Citation {style: $style})-[:FOR_PAPER]->(p:Paper)
+        MATCH (c:Citation {style: $style, session_id: $session_id})-[:FOR_PAPER]->(p:Paper)
         RETURN c.id as id, c.style as style, c.formatted_text as formatted_text, coalesce(p.title, p.name) as paper_title
         """
-        res = neo4j_client.run_query(query, {"style": style})
+        res = neo4j_client.run_query(query, {"style": style, "session_id": session_id})
     else:
         query = """
-        MATCH (c:Citation)-[:FOR_PAPER]->(p:Paper)
+        MATCH (c:Citation {session_id: $session_id})-[:FOR_PAPER]->(p:Paper)
         RETURN c.id as id, c.style as style, c.formatted_text as formatted_text, coalesce(p.title, p.name) as paper_title
         """
-        res = neo4j_client.run_query(query)
+        res = neo4j_client.run_query(query, {"session_id": session_id})
         
     return [
         {

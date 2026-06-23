@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from utils.neo4j_client import neo4j_client
 from utils.llm_client import llm_client
@@ -19,15 +20,19 @@ def find_mock_longest_path(target_id: str, visited: set) -> list:
 @router.get("/learning-path")
 def get_learning_path(
     target: str = Query(..., description="ID of target concept"),
-    document_id: str = Query(..., description="Document ID to validate ownership and restrict path")
+    document_id: Optional[str] = Query(None, description="Document ID to validate ownership and restrict path"),
+    session_id: Optional[str] = Query(None, description="Session ID to validate ownership and restrict path")
 ):
-    # 1. Verify target concept exists and belongs to the document
+    # 1. Verify target concept exists and belongs to the document/session
     target_node = None
     if neo4j_client.is_mock():
         if target in neo4j_client.mock_nodes:
             target_node = neo4j_client.mock_nodes[target]
             # Validate ownership in mock mode
-            if document_id != "doc-1":
+            if session_id:
+                if target_node.get("session_id") != session_id:
+                    raise HTTPException(status_code=403, detail="Access denied. Target concept does not belong to the specified session.")
+            elif document_id != "doc-1":
                 has_contains = any(
                     e["from"] == document_id and e["to"] == target and e["type"] == "CONTAINS"
                     for e in neo4j_client.mock_edges
@@ -35,18 +40,28 @@ def get_learning_path(
                 if not has_contains and target_node.get("doc_id") != document_id:
                     raise HTTPException(status_code=403, detail="Access denied. Target concept does not belong to the specified document.")
     else:
-        # Verify that document contains target
-        res = neo4j_client.run_query("""
-            MATCH (d:Document {id: $doc_id})-[:CONTAINS]->(c:Concept {id: $target_id})
-            RETURN c.id as id, c.name as name, c.description as description, c.difficulty_level as difficulty_level
-        """, {"target_id": target, "doc_id": document_id})
+        # Verify that document/session contains target
+        if session_id:
+            res = neo4j_client.run_query("""
+                MATCH (c:Concept {id: $target_id, session_id: $session_id})
+                RETURN c.id as id, c.name as name, c.description as description, c.difficulty_level as difficulty_level
+            """, {"target_id": target, "session_id": session_id})
+        else:
+            res = neo4j_client.run_query("""
+                MATCH (d:Document {id: $doc_id})-[:CONTAINS]->(c:Concept {id: $target_id})
+                RETURN c.id as id, c.name as name, c.description as description, c.difficulty_level as difficulty_level
+            """, {"target_id": target, "doc_id": document_id})
+            
         if res:
             target_node = res[0]
         else:
             # Check if it exists at all to throw correct error
             exists_res = neo4j_client.run_query("MATCH (c {id: $target_id}) RETURN c.id", {"target_id": target})
             if exists_res:
-                raise HTTPException(status_code=403, detail="Access denied. Target concept does not belong to the specified document.")
+                if session_id:
+                    raise HTTPException(status_code=403, detail="Access denied. Target concept does not belong to the specified session.")
+                else:
+                    raise HTTPException(status_code=403, detail="Access denied. Target concept does not belong to the specified document.")
 
     if not target_node:
         raise HTTPException(status_code=404, detail="Target concept not found.")
@@ -55,9 +70,13 @@ def get_learning_path(
     path_nodes = []
     
     if neo4j_client.is_mock():
-        # Restrict mock longest path search to nodes belonging to this document ID
+        # Restrict mock longest path search to nodes belonging to this document/session ID
         doc_node_ids = set()
-        if document_id == "doc-1":
+        if session_id:
+            for nid, n in neo4j_client.mock_nodes.items():
+                if n.get("session_id") == session_id:
+                    doc_node_ids.add(nid)
+        elif document_id == "doc-1":
             for nid, n in neo4j_client.mock_nodes.items():
                 if n.get("label") != "Document":
                     doc_node_ids.add(nid)
@@ -93,29 +112,12 @@ def get_learning_path(
                     "difficulty_level": node.get("difficulty_level", "Beginner")
                 })
     else:
-        # Try path starting from a root, enforcing all path nodes are contained in the document
-        query_root = """
-        MATCH (d:Document {id: $doc_id})
-        MATCH path = (start:Concept)-[:PREREQUISITE_OF*1..5]->(target:Concept {id: $target_id})
-        WHERE ALL(x IN nodes(path) WHERE (d)-[:CONTAINS]->(x))
-        AND NOT (start)<-[:PREREQUISITE_OF]-()
-        RETURN [n in nodes(path) | {
-            id: n.id,
-            label: labels(n)[0],
-            name: coalesce(n.name, n.title, "Unknown"),
-            description: coalesce(n.description, ""),
-            difficulty_level: coalesce(n.difficulty_level, "Beginner")
-        }] as nodes_list
-        ORDER BY length(path) DESC LIMIT 1
-        """
-        res = neo4j_client.run_query(query_root, {"target_id": target, "doc_id": document_id})
-        
-        # Fallback to any path ending at target if no root path
-        if not res:
-            query_any = """
-            MATCH (d:Document {id: $doc_id})
-            MATCH path = (start:Concept)-[:PREREQUISITE_OF*1..5]->(target:Concept {id: $target_id})
-            WHERE ALL(x IN nodes(path) WHERE (d)-[:CONTAINS]->(x))
+        # Try path starting from a root, enforcing all path nodes are contained in the document/session
+        if session_id:
+            query_root = """
+            MATCH path = (start:Concept)-[:PREREQUISITE_OF*1..5]->(target:Concept {id: $target_id, session_id: $session_id})
+            WHERE ALL(x IN nodes(path) WHERE x.session_id = $session_id)
+            AND NOT (start)<-[:PREREQUISITE_OF]-()
             RETURN [n in nodes(path) | {
                 id: n.id,
                 label: labels(n)[0],
@@ -125,7 +127,56 @@ def get_learning_path(
             }] as nodes_list
             ORDER BY length(path) DESC LIMIT 1
             """
-            res = neo4j_client.run_query(query_any, {"target_id": target, "doc_id": document_id})
+            res = neo4j_client.run_query(query_root, {"target_id": target, "session_id": session_id})
+            
+            # Fallback to any path ending at target if no root path
+            if not res:
+                query_any = """
+                MATCH path = (start:Concept)-[:PREREQUISITE_OF*1..5]->(target:Concept {id: $target_id, session_id: $session_id})
+                WHERE ALL(x IN nodes(path) WHERE x.session_id = $session_id)
+                RETURN [n in nodes(path) | {
+                    id: n.id,
+                    label: labels(n)[0],
+                    name: coalesce(n.name, n.title, "Unknown"),
+                    description: coalesce(n.description, ""),
+                    difficulty_level: coalesce(n.difficulty_level, "Beginner")
+                }] as nodes_list
+                ORDER BY length(path) DESC LIMIT 1
+                """
+                res = neo4j_client.run_query(query_any, {"target_id": target, "session_id": session_id})
+        else:
+            query_root = """
+            MATCH (d:Document {id: $doc_id})
+            MATCH path = (start:Concept)-[:PREREQUISITE_OF*1..5]->(target:Concept {id: $target_id})
+            WHERE ALL(x IN nodes(path) WHERE (d)-[:CONTAINS]->(x))
+            AND NOT (start)<-[:PREREQUISITE_OF]-()
+            RETURN [n in nodes(path) | {
+                id: n.id,
+                label: labels(n)[0],
+                name: coalesce(n.name, n.title, "Unknown"),
+                description: coalesce(n.description, ""),
+                difficulty_level: coalesce(n.difficulty_level, "Beginner")
+            }] as nodes_list
+            ORDER BY length(path) DESC LIMIT 1
+            """
+            res = neo4j_client.run_query(query_root, {"target_id": target, "doc_id": document_id})
+            
+            # Fallback to any path ending at target if no root path
+            if not res:
+                query_any = """
+                MATCH (d:Document {id: $doc_id})
+                MATCH path = (start:Concept)-[:PREREQUISITE_OF*1..5]->(target:Concept {id: $target_id})
+                WHERE ALL(x IN nodes(path) WHERE (d)-[:CONTAINS]->(x))
+                RETURN [n in nodes(path) | {
+                    id: n.id,
+                    label: labels(n)[0],
+                    name: coalesce(n.name, n.title, "Unknown"),
+                    description: coalesce(n.description, ""),
+                    difficulty_level: coalesce(n.difficulty_level, "Beginner")
+                }] as nodes_list
+                ORDER BY length(path) DESC LIMIT 1
+                """
+                res = neo4j_client.run_query(query_any, {"target_id": target, "doc_id": document_id})
             
         if res and res[0].get("nodes_list"):
             path_nodes = res[0]["nodes_list"]

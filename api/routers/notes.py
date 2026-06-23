@@ -16,10 +16,10 @@ logger = logging.getLogger("notes_router")
 class NoteCreate(BaseModel):
     content: str
 
-def run_concept_linking_for_note(note_id: str, content: str):
-    # Fetch existing concepts
-    query = "MATCH (c:Concept) RETURN c.id as id, c.name as name"
-    concepts = neo4j_client.run_query(query)
+def run_concept_linking_for_note(note_id: str, content: str, session_id: str):
+    # Fetch existing concepts for this session
+    query = "MATCH (c:Concept {session_id: $session_id}) RETURN c.id as id, c.name as name"
+    concepts = neo4j_client.run_query(query, {"session_id": session_id})
     
     matched_ids = []
     new_concept = None
@@ -89,11 +89,11 @@ def run_concept_linking_for_note(note_id: str, content: str):
         new_id = str(uuid.uuid4())
         concept_query = """
         MATCH (n:Note {id: $nid})
-        MERGE (c:Concept {name: $name})
+        MERGE (c:Concept {name: $name, session_id: $session_id})
         ON CREATE SET c.id = $cid, c.provisional = true, c.description = 'Provisional concept created from note.'
         MERGE (n)-[:REFERENCES]->(c)
         """
-        neo4j_client.run_query(concept_query, {"nid": note_id, "name": new_concept, "cid": new_id})
+        neo4j_client.run_query(concept_query, {"nid": note_id, "name": new_concept, "cid": new_id, "session_id": session_id})
         
         # Write to mock store
         if neo4j_client.is_mock():
@@ -103,25 +103,27 @@ def run_concept_linking_for_note(note_id: str, content: str):
                 "name": new_concept,
                 "description": "Provisional concept created from note.",
                 "difficulty_level": "Beginner",
-                "provisional": True
+                "provisional": True,
+                "session_id": session_id
             }
             neo4j_client.mock_edges.append({"from": note_id, "to": new_id, "type": "REFERENCES"})
 
 @router.post("/notes")
-def create_note(request: NoteCreate):
+def create_note(request: NoteCreate, session_id: str = Query(...)):
     nid = str(uuid.uuid4())
     created_at = datetime.datetime.now().isoformat()
     
     # Save Note node
     query = """
-    MERGE (n:Note {id: $id})
+    MERGE (n:Note {id: $id, session_id: $session_id})
     ON CREATE SET n.content = $content, n.created_at = $created_at
     RETURN n
     """
     neo4j_client.run_query(query, {
         "id": nid,
         "content": request.content,
-        "created_at": created_at
+        "created_at": created_at,
+        "session_id": session_id
     })
     
     # Mock data write
@@ -130,11 +132,12 @@ def create_note(request: NoteCreate):
             "id": nid,
             "label": "Note",
             "content": request.content,
-            "created_at": created_at
+            "created_at": created_at,
+            "session_id": session_id
         }
         
     # Execute AI concept-linking
-    run_concept_linking_for_note(nid, request.content)
+    run_concept_linking_for_note(nid, request.content, session_id)
     
     return {
         "id": nid,
@@ -143,11 +146,11 @@ def create_note(request: NoteCreate):
     }
 
 @router.get("/notes")
-def get_notes():
+def get_notes(session_id: str = Query(...)):
     if neo4j_client.is_mock():
         results = []
         for nid, node in neo4j_client.mock_nodes.items():
-            if node.get("label") == "Note":
+            if node.get("label") == "Note" and node.get("session_id") == session_id:
                 # Gather referenced concept names
                 linked_concepts = []
                 for edge in neo4j_client.mock_edges:
@@ -165,11 +168,11 @@ def get_notes():
         return results
 
     query = """
-    MATCH (n:Note)
+    MATCH (n:Note {session_id: $session_id})
     OPTIONAL MATCH (n)-[:REFERENCES]->(c:Concept)
     RETURN n.id as id, n.content as content, n.created_at as created_at, collect(c.name) as concepts
     """
-    res = neo4j_client.run_query(query)
+    res = neo4j_client.run_query(query, {"session_id": session_id})
     return [
         {
             "id": r["id"],
@@ -181,13 +184,13 @@ def get_notes():
     ]
 
 @router.get("/notes/search")
-def search_notes(q: str = Query(...)):
+def search_notes(q: str = Query(...), session_id: str = Query(...)):
     if neo4j_client.is_mock():
         # Scans mock notes and matches on text or linked concept names
         results = []
         q_low = q.lower()
         
-        all_notes = get_notes()
+        all_notes = get_notes(session_id=session_id)
         for note in all_notes:
             content_match = q_low in note["content"].lower()
             concept_match = any(q_low in c.lower() for c in note["concepts"])
@@ -197,13 +200,13 @@ def search_notes(q: str = Query(...)):
         return results
 
     query = """
-    MATCH (n:Note)
+    MATCH (n:Note {session_id: $session_id})
     OPTIONAL MATCH (n)-[:REFERENCES]->(c:Concept)
     WITH n, c
     WHERE n.content CONTAINS $q OR c.name CONTAINS $q
     RETURN n.id as id, n.content as content, n.created_at as created_at, collect(c.name) as concepts
     """
-    res = neo4j_client.run_query(query, {"q": q})
+    res = neo4j_client.run_query(query, {"q": q, "session_id": session_id})
     return [
         {
             "id": r["id"],

@@ -103,6 +103,7 @@ export default function GraphCanvas() {
   const documents = useStore((state) => state.documents);
   const activeDocumentId = useStore((state) => state.activeDocumentId);
   const graphFilter = useStore((state) => state.graphFilter);
+  const sessionId = useStore((state) => state.sessionId);
 
   const shouldZoomToFit = useRef(false);
 
@@ -224,14 +225,15 @@ export default function GraphCanvas() {
     return () => window.removeEventListener('resize', updateDimensions);
   }, []);
 
-  // Fetch initial graph if empty and no document is active/uploaded
+  // Fetch session graph when sessionId changes if not already loaded
   useEffect(() => {
-    const fetchInitialGraph = async () => {
+    const fetchSessionGraph = async () => {
+      if (!sessionId) return;
+      if (nodes.length > 0) return; // Skip if already loaded by store
       setLoading(true);
       setCanvasError(null);
       try {
-        // Query list of all nodes to display a default set if no document is uploaded
-        const response = await fetch(`${API_BASE_URL}/documents/doc-1/graph`);
+        const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/graph`);
         if (response.ok) {
           const data = await response.json();
           setGraphData(data);
@@ -239,20 +241,16 @@ export default function GraphCanvas() {
           setCanvasError(`HTTP Error ${response.status}: ${response.statusText}`);
         }
       } catch (err: any) {
-        console.error('Failed to load initial graph', err);
+        console.error('Failed to load session graph', err);
         setCanvasError(err.message || 'API connection failed');
       } finally {
         setLoading(false);
       }
     };
-    const nodeCount = safeNodes.length;
-    const docCount = Array.isArray(documents) ? documents.length : 0;
-    if (nodeCount === 0 && docCount === 0 && (!activeDocumentId || activeDocumentId === 'doc-1')) {
-      fetchInitialGraph();
-    }
-  }, [nodes, documents, activeDocumentId, setGraphData, safeNodes.length]);
 
-  // Compute degree for each node (number of connections)
+    fetchSessionGraph();
+  }, [sessionId, setGraphData, nodes.length]);
+
   const nodeDegrees = React.useMemo(() => {
     const degrees: Record<string, number> = {};
     validatedGraphData.nodes.forEach(n => {
@@ -354,7 +352,9 @@ export default function GraphCanvas() {
 
     try {
       // Fetch full details of the clicked node
-      const detailsUrl = `${API_BASE_URL}/graph/node/${node.id}?document_id=${activeDocumentId || 'doc-1'}`;
+      const detailsUrl = sessionId
+        ? `${API_BASE_URL}/graph/node/${node.id}?session_id=${sessionId}`
+        : `${API_BASE_URL}/graph/node/${node.id}?document_id=${activeDocumentId || 'doc-1'}`;
       const detailsRes = await fetch(detailsUrl);
       if (detailsRes.ok) {
         const detailsData = await detailsRes.json();
@@ -364,7 +364,9 @@ export default function GraphCanvas() {
       }
 
       // Fetch dynamic node expansion
-      const url = `${API_BASE_URL}/graph/expand?node_id=${node.id}&depth=${graphDepth}&mode=${graphMode}&document_id=${activeDocumentId || 'doc-1'}`;
+      const url = sessionId
+        ? `${API_BASE_URL}/graph/expand?node_id=${node.id}&depth=${graphDepth}&mode=${graphMode}&session_id=${sessionId}`
+        : `${API_BASE_URL}/graph/expand?node_id=${node.id}&depth=${graphDepth}&mode=${graphMode}&document_id=${activeDocumentId || 'doc-1'}`;
       const response = await fetch(url);
       if (response.ok) {
         const expandedData = await response.json();

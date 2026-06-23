@@ -2,7 +2,8 @@ import io
 import uuid
 import datetime
 import logging
-from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
+from typing import Optional
+from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
 from pypdf import PdfReader
 
@@ -221,7 +222,7 @@ def cluster_and_merge_nodes(nodes: list) -> tuple[list, dict]:
             
     return canonical_nodes, name_mapping
 
-def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
+def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, session_id: str):
     extraction_status_cache[doc_id] = {"status": "processing", "progress_pct": 10, "error": None}
     
     try:
@@ -328,7 +329,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
 
         # Check multi-document mode config
         from api.config import config
-        multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False)
+        multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False) or (session_id is not None)
 
         if not multi_doc_mode:
             # Clear all cached data, previous uploads, embeddings, vector-store entries, and session memory
@@ -589,13 +590,20 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
             
             # Check multi-document mode config
             from api.config import config
-            multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False)
+            multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False) or (session_id is not None)
 
             # Neo4j query
             if label == "Paper":
                 year = node.get("year")
                 doi = node.get("doi")
-                if multi_doc_mode:
+                if session_id:
+                    query = """
+                    MERGE (n:Paper {name: $name, session_id: $session_id})
+                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id, n.year = $year, n.doi = $doi
+                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.doi = $doi
+                    RETURN n.id as node_id
+                    """
+                elif multi_doc_mode:
                     query = """
                     MERGE (n:Paper {name: $name})
                     ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id, n.year = $year, n.doi = $doi
@@ -610,7 +618,14 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
                     RETURN n.id as node_id
                     """
             else:
-                if multi_doc_mode:
+                if session_id:
+                    query = f"""
+                    MERGE (n:{label} {{name: $name, session_id: $session_id}})
+                    ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id
+                    ON MATCH SET n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END
+                    RETURN n.id as node_id
+                    """
+                elif multi_doc_mode:
                     query = f"""
                     MERGE (n:{label} {{name: $name}})
                     ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id
@@ -630,6 +645,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
                 "id": node_id, 
                 "description": desc, 
                 "doc_id": doc_id,
+                "session_id": session_id,
                 "year": node.get("year"),
                 "doi": node.get("doi")
             })
@@ -653,7 +669,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
                 existing_id = None
                 for nid, mn in neo4j_client.mock_nodes.items():
                     if mn.get("label") == label and mn.get("name", "").lower() == name.lower():
-                        if multi_doc_mode or mn.get("doc_id") == doc_id:
+                        if mn.get("session_id") == session_id:
                             existing_id = nid
                             break
                 if existing_id:
@@ -668,7 +684,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
                         "name": name,
                         "description": desc,
                         "difficulty_level": "Beginner",
-                        "doc_id": doc_id
+                        "doc_id": doc_id,
+                        "session_id": session_id
                     }
                     if label == "Paper":
                         node_data["title"] = name
@@ -691,24 +708,32 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
             if rel_type not in ["PREREQUISITE_OF", "RELATED_TO", "EXTENDS", "CONTRADICTS", "USES_METHOD", "DEPENDS_ON", "CITES", "AUTHORED_BY", "AFFILIATED_WITH", "MENTIONS", "HAS_KEYWORD"]:
                 rel_type = "RELATED_TO"
                 
-            query = f"""
-            MATCH (a {{name: $from_name, doc_id: $doc_id}})
-            MATCH (b {{name: $to_name, doc_id: $doc_id}})
-            MERGE (a)-[r:{rel_type}]->(b)
-            """
-            neo4j_client.run_query(query, {"from_name": from_name, "to_name": to_name, "doc_id": doc_id})
+            if session_id:
+                query = f"""
+                MATCH (a {{name: $from_name, session_id: $session_id}})
+                MATCH (b {{name: $to_name, session_id: $session_id}})
+                MERGE (a)-[r:{rel_type}]->(b)
+                """
+                neo4j_client.run_query(query, {"from_name": from_name, "to_name": to_name, "session_id": session_id})
+            else:
+                query = f"""
+                MATCH (a {{name: $from_name, doc_id: $doc_id}})
+                MATCH (b {{name: $to_name, doc_id: $doc_id}})
+                MERGE (a)-[r:{rel_type}]->(b)
+                """
+                neo4j_client.run_query(query, {"from_name": from_name, "to_name": to_name, "doc_id": doc_id})
             
             # Also seed to mock store if in mock mode
             if neo4j_client.is_mock():
-                # Find matched nodes in mock for this document namespace
+                # Find matched nodes in mock for this document/session namespace
                 from_id = None
                 to_id = None
                 for nid, n in neo4j_client.mock_nodes.items():
                     if n.get("name", "").lower() == from_name.lower():
-                        if multi_doc_mode or n.get("doc_id") == doc_id:
+                        if (session_id and n.get("session_id") == session_id) or (not session_id and (multi_doc_mode or n.get("doc_id") == doc_id)):
                             from_id = nid
                     if n.get("name", "").lower() == to_name.lower():
-                        if multi_doc_mode or n.get("doc_id") == doc_id:
+                        if (session_id and n.get("session_id") == session_id) or (not session_id and (multi_doc_mode or n.get("doc_id") == doc_id)):
                             to_id = nid
                 if from_id and to_id:
                     neo4j_client.mock_edges.append({
@@ -736,7 +761,11 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
             {"doc_id": doc_id, "error": error_msg}
         )
 @router.post("/documents/upload", response_model=UploadResponse)
-async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_document(
+    background_tasks: BackgroundTasks, 
+    file: UploadFile = File(...),
+    session_id: Optional[str] = Query(None)
+):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF documents are supported.")
         
@@ -746,7 +775,7 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
 
         # Clear state if not multi-document mode
         from api.config import config
-        multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False)
+        multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False) or (session_id is not None)
         if not multi_doc_mode:
             extraction_status_cache.clear()
             try:
@@ -774,21 +803,37 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
         query = """
         MERGE (d:Document {id: $id})
         ON CREATE SET d.title = $title, d.type = 'pdf', d.upload_date = $upload_date, 
-                      d.storage_url = $storage_url, d.status = 'processing', d.progress_pct = 10
+                      d.storage_url = $storage_url, d.status = 'processing', d.progress_pct = 10,
+                      d.session_id = $session_id
         RETURN d
         """
         neo4j_client.run_query(query, {
             "id": doc_id,
             "title": file.filename,
             "upload_date": upload_date,
-            "storage_url": storage_url
+            "storage_url": storage_url,
+            "session_id": session_id
         })
+        
+        # Also seed Document to mock store if in mock mode
+        if neo4j_client.is_mock():
+            neo4j_client.mock_nodes[doc_id] = {
+                "id": doc_id,
+                "label": "Document",
+                "title": file.filename,
+                "type": "pdf",
+                "status": "processing",
+                "progress_pct": 10,
+                "upload_date": upload_date,
+                "storage_url": storage_url,
+                "session_id": session_id
+            }
         
         # Set initial status in cache
         extraction_status_cache[doc_id] = {"status": "processing", "progress_pct": 10, "error": None}
         
         # 3. Trigger background task
-        background_tasks.add_task(run_extraction_pipeline, doc_id, file_bytes, file.filename)
+        background_tasks.add_task(run_extraction_pipeline, doc_id, file_bytes, file.filename, session_id)
         
         return UploadResponse(id=doc_id, status="processing", title=file.filename)
         
@@ -914,6 +959,86 @@ def get_document_graph(id: str):
                 "type": r["type"]
             })
         
+    return {"nodes": nodes, "edges": edges}
+
+@router.get("/sessions/{session_id}/graph")
+def get_session_graph(session_id: str):
+    if neo4j_client.is_mock():
+        session_nodes = []
+        session_node_ids = set()
+        for nid, n in neo4j_client.mock_nodes.items():
+            if n.get("session_id") == session_id and n.get("label") not in ["Document", "Note", "Highlight", "Citation"]:
+                n_copy = dict(n)
+                if not n_copy.get("name") and n_copy.get("title"):
+                    n_copy["name"] = n_copy["title"]
+                session_nodes.append(n_copy)
+                session_node_ids.add(nid)
+                
+        if not session_nodes and (session_id == "session-1" or session_id == "default"):
+            # Fallback to pre-seeded mock data for default session
+            ml_nodes = []
+            for n in neo4j_client.mock_nodes.values():
+                if n.get("label") not in ["Document", "Note", "Highlight", "Citation"]:
+                    n_copy = dict(n)
+                    if not n_copy.get("name") and n_copy.get("title"):
+                        n_copy["name"] = n_copy["title"]
+                    ml_nodes.append(n_copy)
+            ml_node_ids = {n["id"] for n in ml_nodes}
+            ml_edges = [
+                e for e in neo4j_client.mock_edges 
+                if e["type"] != "CONTAINS" and e["from"] in ml_node_ids and e["to"] in ml_node_ids
+            ]
+            return {"nodes": ml_nodes, "edges": ml_edges}
+            
+        session_edges = [
+            e for e in neo4j_client.mock_edges 
+            if e["type"] != "CONTAINS" and e["from"] in session_node_ids and e["to"] in session_node_ids
+        ]
+        return {"nodes": session_nodes, "edges": session_edges}
+
+    # Real Neo4j Mode
+    nodes_query = """
+    MATCH (n)
+    WHERE n.session_id = $session_id AND NOT n:Document AND NOT n:Note AND NOT n:Highlight AND NOT n:Citation
+    RETURN labels(n)[0] as label, n.id as id, coalesce(n.name, n.title) as name, n.description as description, n.difficulty_level as difficulty_level, n.doc_id as doc_id, n.year as year, n.doi as doi
+    """
+    nodes_res = neo4j_client.run_query(nodes_query, {"session_id": session_id})
+    
+    edges_query = """
+    MATCH (n) WHERE n.session_id = $session_id AND NOT n:Document AND NOT n:Note AND NOT n:Highlight AND NOT n:Citation
+    MATCH (m) WHERE m.session_id = $session_id AND NOT m:Document AND NOT m:Note AND NOT m:Highlight AND NOT m:Citation
+    MATCH (n)-[r]->(m)
+    RETURN n.id as from_id, m.id as to_id, type(r) as type
+    """
+    edges_res = neo4j_client.run_query(edges_query, {"session_id": session_id})
+    
+    nodes = []
+    valid_node_ids = set()
+    for r in nodes_res:
+        node_data = {
+            "id": r["id"],
+            "label": r["label"],
+            "name": r["name"] or "Unknown",
+            "description": r.get("description", ""),
+            "difficulty_level": r.get("difficulty_level", "Beginner"),
+            "doc_id": r.get("doc_id")
+        }
+        if r.get("year") is not None:
+            node_data["year"] = r["year"]
+        if r.get("doi") is not None:
+            node_data["doi"] = r["doi"]
+        nodes.append(node_data)
+        valid_node_ids.add(r["id"])
+        
+    edges = []
+    for r in edges_res:
+        if r["from_id"] in valid_node_ids and r["to_id"] in valid_node_ids:
+            edges.append({
+                "from": r["from_id"],
+                "to": r["to_id"],
+                "type": r["type"]
+            })
+            
     return {"nodes": nodes, "edges": edges}
 
 @router.get("/documents/{id}/text")

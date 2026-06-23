@@ -18,10 +18,10 @@ class HighlightCreate(BaseModel):
     page: int
     source_document_id: str
 
-def run_concept_linking_for_highlight(highlight_id: str, text: str, doc_id: str):
-    # Fetch existing concepts for this document only
-    query = "MATCH (c:Concept {doc_id: $doc_id}) RETURN c.id as id, c.name as name"
-    concepts = neo4j_client.run_query(query, {"doc_id": doc_id})
+def run_concept_linking_for_highlight(highlight_id: str, text: str, doc_id: str, session_id: str):
+    # Fetch existing concepts for this session only
+    query = "MATCH (c:Concept {session_id: $session_id}) RETURN c.id as id, c.name as name"
+    concepts = neo4j_client.run_query(query, {"session_id": session_id})
     
     matched_ids = []
     new_concept = None
@@ -96,11 +96,11 @@ def run_concept_linking_for_highlight(highlight_id: str, text: str, doc_id: str)
         new_id = str(uuid.uuid4())
         concept_query = """
         MATCH (h:Highlight {id: $hid})
-        MERGE (c:Concept {name: $name, doc_id: $doc_id})
+        MERGE (c:Concept {name: $name, session_id: $session_id})
         ON CREATE SET c.id = $cid, c.provisional = true, c.description = 'Provisional concept created from highlight.'
         MERGE (h)-[:RELATES_TO]->(c)
         """
-        neo4j_client.run_query(concept_query, {"hid": highlight_id, "name": new_concept, "cid": new_id, "doc_id": doc_id})
+        neo4j_client.run_query(concept_query, {"hid": highlight_id, "name": new_concept, "cid": new_id, "session_id": session_id})
         
         # Write to mock store
         if neo4j_client.is_mock():
@@ -111,18 +111,19 @@ def run_concept_linking_for_highlight(highlight_id: str, text: str, doc_id: str)
                 "description": "Provisional concept created from highlight.",
                 "difficulty_level": "Beginner",
                 "provisional": True,
-                "doc_id": doc_id
+                "doc_id": doc_id,
+                "session_id": session_id
             }
             neo4j_client.mock_edges.append({"from": highlight_id, "to": new_id, "type": "RELATES_TO"})
 
 @router.post("/highlights")
-def create_highlight(request: HighlightCreate):
+def create_highlight(request: HighlightCreate, session_id: str = Query(...)):
     hid = str(uuid.uuid4())
     created_at = datetime.datetime.now().isoformat()
     
     # Save Highlight node
     query = """
-    MERGE (h:Highlight {id: $id})
+    MERGE (h:Highlight {id: $id, session_id: $session_id})
     ON CREATE SET h.text = $text, h.page = $page, h.source_type = 'pdf', h.created_at = $created_at
     RETURN h
     """
@@ -130,7 +131,8 @@ def create_highlight(request: HighlightCreate):
         "id": hid,
         "text": request.text,
         "page": request.page,
-        "created_at": created_at
+        "created_at": created_at,
+        "session_id": session_id
     })
     
     # Link to Document
@@ -148,12 +150,13 @@ def create_highlight(request: HighlightCreate):
             "label": "Highlight",
             "text": request.text,
             "page": request.page,
-            "created_at": created_at
+            "created_at": created_at,
+            "session_id": session_id
         }
         neo4j_client.mock_edges.append({"from": hid, "to": request.source_document_id, "type": "EXTRACTED_FROM"})
         
     # Execute AI concept-linking
-    run_concept_linking_for_highlight(hid, request.text, request.source_document_id)
+    run_concept_linking_for_highlight(hid, request.text, request.source_document_id, session_id)
     
     return {
         "id": hid,
@@ -164,12 +167,12 @@ def create_highlight(request: HighlightCreate):
     }
 
 @router.get("/highlights")
-def get_highlights(concept_id: Optional[str] = Query(None)):
+def get_highlights(concept_id: Optional[str] = Query(None), session_id: str = Query(...)):
     if neo4j_client.is_mock():
         # In mock mode, gather matching highlights
         results = []
         for nid, node in neo4j_client.mock_nodes.items():
-            if node.get("label") == "Highlight":
+            if node.get("label") == "Highlight" and node.get("session_id") == session_id:
                 # Filter if concept_id is specified
                 if concept_id:
                     # Check if there is a RELATES_TO link
@@ -199,18 +202,18 @@ def get_highlights(concept_id: Optional[str] = Query(None)):
 
     if concept_id:
         query = """
-        MATCH (h:Highlight)-[:RELATES_TO]->(c:Concept {id: $concept_id})
+        MATCH (h:Highlight {session_id: $session_id})-[:RELATES_TO]->(c:Concept {id: $concept_id})
         OPTIONAL MATCH (h)-[:EXTRACTED_FROM]->(d:Document)
         RETURN h.id as id, h.text as text, h.page as page, h.created_at as created_at, d.title as doc_title
         """
-        res = neo4j_client.run_query(query, {"concept_id": concept_id})
+        res = neo4j_client.run_query(query, {"concept_id": concept_id, "session_id": session_id})
     else:
         query = """
-        MATCH (h:Highlight)
+        MATCH (h:Highlight {session_id: $session_id})
         OPTIONAL MATCH (h)-[:EXTRACTED_FROM]->(d:Document)
         RETURN h.id as id, h.text as text, h.page as page, h.created_at as created_at, d.title as doc_title
         """
-        res = neo4j_client.run_query(query)
+        res = neo4j_client.run_query(query, {"session_id": session_id})
         
     return [
         {

@@ -39,6 +39,13 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const [copiedCitationId, setCopiedCitationId] = useState<string | null>(null);
   const [citationsLoading, setCitationsLoading] = useState(false);
 
+  // Session state (Sprint 6)
+  const sessionId = useStore((state) => state.sessionId);
+  const sessionsList = useStore((state) => state.sessionsList);
+  const createSession = useStore((state) => state.createSession);
+  const switchSession = useStore((state) => state.switchSession);
+  const deleteSession = useStore((state) => state.deleteSession);
+
   const [activeNavTab, setActiveNavTab] = useState<'navigation' | 'notes' | 'citations'>('navigation');
   const [noteSearch, setNoteSearch] = useState('');
   const [noteInput, setNoteInput] = useState('');
@@ -54,36 +61,61 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const [notesError, setNotesError] = useState<string | null>(null);
   const [citationsError, setCitationsError] = useState<string | null>(null);
 
-  // Fetch health status
+  // Fetch health status with retry logic and race condition handling
   useEffect(() => {
-    const fetchHealth = async () => {
-      try {
-        const response = await fetch(`${API_BASE_URL}/health/deep`);
-        if (response.ok) {
-          const data = await response.json();
-          setHealthStatus(data.services);
-          setApiError(null);
-        } else {
-          setApiError(`HTTP Error ${response.status}: ${response.statusText}`);
-          setHealthStatus(null);
+    if (!API_BASE_URL) return;
+
+    let isMounted = true;
+    const fetchHealthWithRetry = async (retries = 3, delay = 1000) => {
+      for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+          const response = await fetch(`${API_BASE_URL}/health/deep`);
+          if (response.ok) {
+            const data = await response.json();
+            if (isMounted) {
+              setHealthStatus(data.services);
+              setApiError(null);
+            }
+            return;
+          } else {
+            if (attempt === retries) {
+              if (isMounted) {
+                setApiError(`HTTP Error ${response.status}: ${response.statusText}`);
+                setHealthStatus(null);
+              }
+            }
+          }
+        } catch (err: any) {
+          if (attempt === retries) {
+            if (isMounted) {
+              console.error('Failed to fetch system health status after retries', err);
+              setApiError(err.message || 'API connection failed (server offline)');
+              setHealthStatus(null);
+            }
+          } else {
+            // Wait before next attempt (delay increases for backoff)
+            await new Promise(resolve => setTimeout(resolve, delay * attempt));
+          }
         }
-      } catch (err: any) {
-        console.error('Failed to fetch system health status', err);
-        setApiError(err.message || 'API connection failed (server offline)');
-        setHealthStatus(null);
       }
     };
     
-    fetchHealth();
-    const interval = setInterval(fetchHealth, 15000); // Check every 15s
-    return () => clearInterval(interval);
+    // Initial load fetch
+    fetchHealthWithRetry();
+    const interval = setInterval(() => fetchHealthWithRetry(1), 15000); // 15s check (no retries for background checks)
+    
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, []);
 
   // Fetch notes on load and document change
   useEffect(() => {
+    if (!sessionId) return;
     const fetchNotes = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/notes`);
+        const response = await fetch(`${API_BASE_URL}/notes?session_id=${sessionId}`);
         if (response.ok) {
           const data = await response.json();
           setNotes(data);
@@ -97,14 +129,15 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
       }
     };
     fetchNotes();
-  }, [activeDocumentId, setNotes]);
+  }, [activeDocumentId, sessionId, setNotes]);
 
   // Fetch citations on load and document change
   useEffect(() => {
+    if (!sessionId) return;
     const fetchCitations = async () => {
       setCitationsLoading(true);
       try {
-        const response = await fetch(`${API_BASE_URL}/citations`);
+        const response = await fetch(`${API_BASE_URL}/citations?session_id=${sessionId}`);
         if (response.ok) {
           const data = await response.json();
           setCitations(data);
@@ -120,18 +153,21 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
       }
     };
     fetchCitations();
-  }, [activeDocumentId, setCitations]);
+  }, [activeDocumentId, sessionId, setCitations]);
 
   const handleDocumentSelect = async (docId: string) => {
     setActiveDocumentId(docId);
     try {
-      const response = await fetch(`${API_BASE_URL}/documents/${docId}/graph`);
+      const url = sessionId
+        ? `${API_BASE_URL}/sessions/${sessionId}/graph`
+        : `${API_BASE_URL}/documents/${docId}/graph`;
+      const response = await fetch(url);
       if (response.ok) {
         const data = await response.json();
         setGraphData(data);
 
         // Automatically select the central Topic node of the selected document
-        const topicNode = (data.nodes || []).find((n: any) => n.label === 'Topic');
+        const topicNode = (data.nodes || []).find((n: any) => n.label === 'Topic' && (!sessionId || n.doc_id === docId));
         if (topicNode) {
           setSelectedNode(topicNode);
         } else {
@@ -146,10 +182,11 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const handleNoteSearchChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const q = e.target.value;
     setNoteSearch(q);
+    if (!sessionId) return;
     try {
       const url = q.trim()
-        ? `${API_BASE_URL}/notes/search?q=${encodeURIComponent(q)}`
-        : `${API_BASE_URL}/notes`;
+        ? `${API_BASE_URL}/notes/search?q=${encodeURIComponent(q)}&session_id=${sessionId}`
+        : `${API_BASE_URL}/notes?session_id=${sessionId}`;
       const response = await fetch(url);
       if (response.ok) {
         const data = await response.json();
@@ -165,10 +202,10 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   };
 
   const handleAddNote = async () => {
-    if (!noteInput.trim()) return;
+    if (!noteInput.trim() || !sessionId) return;
     setNoteSubmitLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/notes`, {
+      const response = await fetch(`${API_BASE_URL}/notes?session_id=${sessionId}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -182,8 +219,10 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
         setNotesError(null);
         
         // Refresh graph to show newly added Note node & links
-        if (activeDocumentId) {
-          handleDocumentSelect(activeDocumentId);
+        const graphResponse = await fetch(`${API_BASE_URL}/sessions/${sessionId}/graph`);
+        if (graphResponse.ok) {
+          const graphData = await graphResponse.json();
+          setGraphData(graphData);
         }
       } else {
         setNotesError(`HTTP Error ${response.status}: ${response.statusText}`);
@@ -217,6 +256,42 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
             <p className="text-xs font-semibold text-slate-300 truncate font-sans">{user?.email || 'Guest User'}</p>
             <p className="text-[9px] text-cyan-400 font-mono font-bold tracking-wider uppercase">{user?.role || 'student'}</p>
           </div>
+        </div>
+      </div>
+
+      {/* Session Manager HUD */}
+      <div className="px-4 py-3 border-b border-cyan-500/10 bg-[#041413]/40 flex flex-col gap-2.5 animate-fadeIn">
+        <div className="flex items-center justify-between">
+          <span className="text-[9px] text-cyan-400/80 font-mono font-bold tracking-widest uppercase">ACTIVE SESSION</span>
+          <button
+            onClick={() => createSession()}
+            className="p-1 hover:bg-cyan-950/40 text-cyan-400 hover:text-cyan-300 rounded border border-cyan-500/10 hover:border-cyan-500/35 transition-all cursor-pointer"
+            title="New Session"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <div className="flex items-center gap-1.5 w-full">
+          <select
+            value={sessionId || ''}
+            onChange={(e) => switchSession(e.target.value)}
+            className="flex-1 px-2.5 py-1.5 rounded-lg bg-[#030c0b] border border-cyan-500/20 text-xs font-medium text-slate-200 focus:outline-none focus:border-cyan-500/50 cursor-pointer"
+          >
+            {sessionsList.map((session) => (
+              <option key={session.id} value={session.id}>
+                {session.name}
+              </option>
+            ))}
+          </select>
+          {sessionsList.length > 1 && (
+            <button
+              onClick={() => sessionId && deleteSession(sessionId)}
+              className="p-2 bg-rose-950/20 hover:bg-rose-900/40 text-rose-400 hover:text-rose-300 rounded-lg border border-rose-500/10 hover:border-rose-500/35 transition-all cursor-pointer"
+              title="Delete Active Session"
+            >
+              <Trash className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -542,7 +617,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
               <span className={`w-2 h-2 rounded-full cursor-help ${healthStatus.anthropic.status === 'ok' ? 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)]' : 'bg-rose-500 animate-ping'}`} title={`AI Copilot (${healthStatus.anthropic.mode})`} />
             </div>
           ) : (
-            <span className="animate-pulse text-[9px] text-slate-600 font-mono">Verifying...</span>
+            <span className="animate-pulse text-[9px] text-slate-600 font-mono">Connecting...</span>
           )}
         </div>
       </div>
@@ -573,6 +648,7 @@ export function RightSidebar() {
   const appendGraphData = useStore((state) => state.appendGraphData);
   const globalNodes = useStore((state) => state.nodes);
   const activeDocumentId = useStore((state) => state.activeDocumentId);
+  const sessionId = useStore((state) => state.sessionId);
 
   // Local state
   const [contextCard, setContextCard] = useState<any>(null);
@@ -591,7 +667,10 @@ export function RightSidebar() {
     if (!selectedNode || selectedNode.label !== 'Paper') return;
     setCitationSaving(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/citations`, {
+      const url = sessionId
+        ? `${API_BASE_URL}/citations?session_id=${sessionId}`
+        : `${API_BASE_URL}/citations`;
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -616,7 +695,10 @@ export function RightSidebar() {
     if (!selectedNode || selectedNode.label !== 'Concept') return;
     setPathGenerating(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/learning-path?target=${selectedNode.id}&document_id=${activeDocumentId || 'doc-1'}`);
+      const url = sessionId
+        ? `${API_BASE_URL}/learning-path?target=${selectedNode.id}&session_id=${sessionId}`
+        : `${API_BASE_URL}/learning-path?target=${selectedNode.id}&document_id=${activeDocumentId || 'doc-1'}`;
+      const response = await fetch(url);
       if (response.ok) {
         const data = await response.json();
         appendGraphData({ nodes: data.nodes, edges: data.edges });
@@ -645,7 +727,10 @@ export function RightSidebar() {
     };
     setSelectedNode(clickedNode);
     try {
-      const response = await fetch(`${API_BASE_URL}/graph/node/${stepNode.id}?document_id=${activeDocumentId || 'doc-1'}`);
+      const url = sessionId
+        ? `${API_BASE_URL}/graph/node/${stepNode.id}?session_id=${sessionId}`
+        : `${API_BASE_URL}/graph/node/${stepNode.id}?document_id=${activeDocumentId || 'doc-1'}`;
+      const response = await fetch(url);
       if (response.ok) {
         const detailsData = await response.json();
         setSelectedNode(detailsData);
@@ -1163,12 +1248,14 @@ export function BottomPanel() {
   const highlights = useStore((state) => state.highlights);
   const setHighlights = useStore((state) => state.setHighlights);
   const [highlightsError, setHighlightsError] = useState<string | null>(null);
+  const sessionId = useStore((state) => state.sessionId);
 
-  // Fetch highlights on mount
+  // Fetch highlights on mount/session change
   useEffect(() => {
+    if (!sessionId) return;
     const fetchHighlights = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/highlights`);
+        const response = await fetch(`${API_BASE_URL}/highlights?session_id=${sessionId}`);
         if (response.ok) {
           const data = await response.json();
           setHighlights(data);
@@ -1182,7 +1269,7 @@ export function BottomPanel() {
       }
     };
     fetchHighlights();
-  }, [setHighlights]);
+  }, [sessionId, setHighlights]);
 
   return (
     <footer className="w-full glass-panel border-t border-cyan-500/10 bg-[#030e0d]/70 select-none">
