@@ -15,4 +15,6 @@ class Config:
     SUPABASE_URL = os.getenv("SUPABASE_URL", "https://mock.supabase.co")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY", "mock-anon-key")
 
+    MULTI_DOCUMENT_MODE = os.getenv("MULTI_DOCUMENT_MODE", "false").lower() == "true"
+
 config = Config()

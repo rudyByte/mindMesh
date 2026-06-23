@@ -81,6 +81,16 @@ class Neo4jClient:
     def _seed_mock_data(self):
         # Default mock concepts mirroring seed.cypher exactly
         self.mock_nodes = {
+            "doc-1": {
+                "id": "doc-1",
+                "label": "Document",
+                "title": "MachineLearningTextbook.pdf",
+                "type": "pdf",
+                "status": "done",
+                "progress_pct": 100,
+                "upload_date": "2026-06-22T04:12:10Z",
+                "storage_url": "mock-url"
+            },
             "c-linear-algebra": {"id": "c-linear-algebra", "label": "Concept", "name": "Linear Algebra", "description": "Vectors, matrices, linear transforms, and vector spaces.", "difficulty_level": "Beginner"},
             "c-calculus": {"id": "c-calculus", "label": "Concept", "name": "Calculus", "description": "Limits, derivatives, integrals, and approximation methods.", "difficulty_level": "Beginner"},
             "c-probability-stats": {"id": "c-probability-stats", "label": "Concept", "name": "Probability & Statistics", "description": "Random variables, distributions, Bayes rule, and estimations.", "difficulty_level": "Beginner"},
@@ -111,11 +121,11 @@ class Neo4jClient:
             "c-gcns": {"id": "c-gcns", "label": "Concept", "name": "Graph Convolutional Networks (GCNs)", "description": "Type of graph neural network utilizing spectral or spatial convolutions.", "difficulty_level": "Advanced"},
             "c-llms": {"id": "c-llms", "label": "Concept", "name": "Large Language Models", "description": "Generative models trained on massive text corpora to perform language tasks.", "difficulty_level": "Advanced"},
             "c-bert-gpt": {"id": "c-bert-gpt", "label": "Concept", "name": "BERT & GPT", "description": "Pioneering encoder/decoder transformer models for language representation and generation.", "difficulty_level": "Advanced"},
-            "p-attention": {"id": "p-attention", "label": "Paper", "title": "Attention Is All You Need", "year": 2017, "doi": "10.48550/arXiv.1706.03762", "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms."},
-            "p-resnet": {"id": "p-resnet", "label": "Paper", "title": "Deep Residual Learning for Image Recognition", "year": 2015, "doi": "10.1109/CVPR.2016.90", "abstract": "Deeper neural networks are more difficult to train. We present a residual learning framework to ease the training of networks that are substantially deeper than those previously used."},
-            "p-gcn": {"id": "p-gcn", "label": "Paper", "title": "Semi-Supervised Classification with Graph Convolutional Networks", "year": 2016, "doi": "10.48550/arXiv.1609.02907", "abstract": "We present a scalable approach for semi-supervised learning on graph-structured data that is based on an efficient variant of convolutional neural networks which operate directly on graphs."},
-            "p-adam": {"id": "p-adam", "label": "Paper", "title": "Adam: A Method for Stochastic Optimization", "year": 2014, "doi": "10.48550/arXiv.1412.6980", "abstract": "We introduce Adam, an algorithm for first-order gradient-based optimization of stochastic objective functions, based on adaptive estimates of lower-order moments."},
-            "p-gan": {"id": "p-gan", "label": "Paper", "title": "Generative Adversarial Nets", "year": 2014, "doi": "10.48550/arXiv.1406.2661", "abstract": "We propose a new framework for estimating generative models via an adversarial process, in which we simultaneously train two models: a generative model and a discriminative model."},
+            "p-attention": {"id": "p-attention", "label": "Paper", "title": "Attention Is All You Need", "name": "Attention Is All You Need", "year": 2017, "doi": "10.48550/arXiv.1706.03762", "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms."},
+            "p-resnet": {"id": "p-resnet", "label": "Paper", "title": "Deep Residual Learning for Image Recognition", "name": "Deep Residual Learning for Image Recognition", "year": 2015, "doi": "10.1109/CVPR.2016.90", "abstract": "Deeper neural networks are more difficult to train. We present a residual learning framework to ease the training of networks that are substantially deeper than those previously used."},
+            "p-gcn": {"id": "p-gcn", "label": "Paper", "title": "Semi-Supervised Classification with Graph Convolutional Networks", "name": "Semi-Supervised Classification with Graph Convolutional Networks", "year": 2016, "doi": "10.48550/arXiv.1609.02907", "abstract": "We present a scalable approach for semi-supervised learning on graph-structured data that is based on an efficient variant of convolutional neural networks which operate directly on graphs."},
+            "p-adam": {"id": "p-adam", "label": "Paper", "title": "Adam: A Method for Stochastic Optimization", "name": "Adam: A Method for Stochastic Optimization", "year": 2014, "doi": "10.48550/arXiv.1412.6980", "abstract": "We introduce Adam, an algorithm for first-order gradient-based optimization of stochastic objective functions, based on adaptive estimates of lower-order moments."},
+            "p-gan": {"id": "p-gan", "label": "Paper", "title": "Generative Adversarial Nets", "name": "Generative Adversarial Nets", "year": 2014, "doi": "10.48550/arXiv.1406.2661", "abstract": "We propose a new framework for estimating generative models via an adversarial process, in which we simultaneously train two models: a generative model and a discriminative model."},
             "a-ashish-vaswani": {"id": "a-ashish-vaswani", "label": "Author", "name": "Ashish Vaswani"},
             "a-kaiming-he": {"id": "a-kaiming-he", "label": "Author", "name": "Kaiming He"},
             "a-thomas-kipf": {"id": "a-thomas-kipf", "label": "Author", "name": "Thomas Kipf"},
@@ -175,6 +185,15 @@ class Neo4jClient:
             # Affiliation
             {"from": "a-ashish-vaswani", "to": "inst-google", "type": "AFFILIATED_WITH"}
         ]
+        # Dynamically set doc_id and create CONTAINS edges for doc-1
+        for nid, node in list(self.mock_nodes.items()):
+            if nid != "doc-1":
+                node["doc_id"] = "doc-1"
+                self.mock_edges.append({
+                    "from": "doc-1",
+                    "to": nid,
+                    "type": "CONTAINS"
+                })
 
     def _run_mock_query(self, query: str, parameters: dict = None):
         query_upper = query.upper()

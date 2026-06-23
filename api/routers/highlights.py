@@ -18,10 +18,10 @@ class HighlightCreate(BaseModel):
     page: int
     source_document_id: str
 
-def run_concept_linking_for_highlight(highlight_id: str, text: str):
-    # Fetch existing concepts
-    query = "MATCH (c:Concept) RETURN c.id as id, c.name as name"
-    concepts = neo4j_client.run_query(query)
+def run_concept_linking_for_highlight(highlight_id: str, text: str, doc_id: str):
+    # Fetch existing concepts for this document only
+    query = "MATCH (c:Concept {doc_id: $doc_id}) RETURN c.id as id, c.name as name"
+    concepts = neo4j_client.run_query(query, {"doc_id": doc_id})
     
     matched_ids = []
     new_concept = None
@@ -52,7 +52,12 @@ def run_concept_linking_for_highlight(highlight_id: str, text: str):
                 f"Return the matched IDs. If it describes a key concept that is not in the list, "
                 f"propose its name in 'new_concept' (keep it short like 'Self-attention').\n"
                 f"Return ONLY valid JSON matching this schema:\n"
-                f"{{\"matched_ids\": [\"id1\", \"id2\"], \"new_concept\": null | \"concept_name\"}}"
+                f"{{\n"
+                f"  \"matched_ids\": [\n"
+                f"    \"id1\"\n"
+                f"  ],\n"
+                f"  \"new_concept\": null\n"
+                f"}}\n"
             )
             
             res = llm_client._client.messages.create(
@@ -91,11 +96,11 @@ def run_concept_linking_for_highlight(highlight_id: str, text: str):
         new_id = str(uuid.uuid4())
         concept_query = """
         MATCH (h:Highlight {id: $hid})
-        MERGE (c:Concept {name: $name})
+        MERGE (c:Concept {name: $name, doc_id: $doc_id})
         ON CREATE SET c.id = $cid, c.provisional = true, c.description = 'Provisional concept created from highlight.'
         MERGE (h)-[:RELATES_TO]->(c)
         """
-        neo4j_client.run_query(concept_query, {"hid": highlight_id, "name": new_concept, "cid": new_id})
+        neo4j_client.run_query(concept_query, {"hid": highlight_id, "name": new_concept, "cid": new_id, "doc_id": doc_id})
         
         # Write to mock store
         if neo4j_client.is_mock():
@@ -105,7 +110,8 @@ def run_concept_linking_for_highlight(highlight_id: str, text: str):
                 "name": new_concept,
                 "description": "Provisional concept created from highlight.",
                 "difficulty_level": "Beginner",
-                "provisional": True
+                "provisional": True,
+                "doc_id": doc_id
             }
             neo4j_client.mock_edges.append({"from": highlight_id, "to": new_id, "type": "RELATES_TO"})
 
@@ -147,7 +153,7 @@ def create_highlight(request: HighlightCreate):
         neo4j_client.mock_edges.append({"from": hid, "to": request.source_document_id, "type": "EXTRACTED_FROM"})
         
     # Execute AI concept-linking
-    run_concept_linking_for_highlight(hid, request.text)
+    run_concept_linking_for_highlight(hid, request.text, request.source_document_id)
     
     return {
         "id": hid,

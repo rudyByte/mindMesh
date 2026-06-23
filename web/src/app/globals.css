@@ -1,16 +1,17 @@
 @import "tailwindcss";
 
 :root {
-  --background: #090d16;
-  --foreground: #f8fafc;
-  --card-bg: rgba(13, 20, 35, 0.7);
-  --card-border: rgba(255, 255, 255, 0.06);
-  --primary: #6366f1;
-  --primary-hover: #4f46e5;
-  --accent-concept: #3b82f6;
-  --accent-paper: #a855f7;
-  --accent-author: #10b981;
-  --accent-topic: #f59e0b;
+  --background: #030c0b;
+  --foreground: #e0f2fe;
+  --card-bg: rgba(6, 18, 17, 0.45);
+  --card-border: rgba(255, 255, 255, 0.05);
+  --primary: #06b6d4; /* Neon cyan */
+  --primary-hover: #22d3ee;
+  --accent-concept: #06b6d4; /* Neon cyan */
+  --accent-paper: #8b5cf6; /* Soft violet */
+  --accent-author: #d946ef; /* Vibrant magenta */
+  --accent-topic: #f59e0b; /* Warm amber */
+  --accent-keyword: #14b8a6; /* Vibrant teal */
 }
 
 @theme inline {
@@ -20,6 +21,10 @@
 
 body {
   background-color: var(--background);
+  background-image: 
+    radial-gradient(circle at 50% 50%, #0a1b18 0%, #030c0b 100%),
+    radial-gradient(circle at 10% 20%, rgba(6, 182, 212, 0.04) 0%, transparent 40%),
+    radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.04) 0%, transparent 40%);
   color: var(--foreground);
   font-family: var(--font-outfit), 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   overflow: hidden;
@@ -27,53 +32,95 @@ body {
   padding: 0;
 }
 
-/* Glassmorphic panels */
+/* Glassmorphic UI Panels */
 .glass-panel {
-  background: var(--card-bg);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--card-border);
+  background: rgba(3, 12, 11, 0.55);
+  backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 0 10px 40px 0 rgba(0, 0, 0, 0.85);
 }
 
 .glass-card {
-  background: rgba(30, 41, 59, 0.35);
-  backdrop-filter: blur(6px);
-  border: 1px solid rgba(255, 255, 255, 0.04);
-  transition: all 0.2s ease-in-out;
+  background: rgba(6, 18, 17, 0.25);
+  backdrop-filter: blur(8px) saturate(120%);
+  border: 1px solid rgba(6, 182, 212, 0.05);
+  box-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.5);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .glass-card:hover {
-  background: rgba(30, 41, 59, 0.5);
-  border-color: rgba(255, 255, 255, 0.1);
-  transform: translateY(-1px);
+  background: rgba(6, 18, 17, 0.45);
+  border-color: rgba(6, 182, 212, 0.2);
+  box-shadow: 0 8px 30px 0 rgba(6, 182, 212, 0.1);
+  transform: translateY(-2px);
+}
+
+/* Traversal Range Slider styling */
+input[type="range"]::-webkit-slider-thumb {
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.8);
+  border: 2px solid #ffffff;
+  height: 12px;
+  width: 12px;
+  border-radius: 50%;
+  background: #06b6d4;
+  cursor: pointer;
+  -webkit-appearance: none;
+  margin-top: -4px;
 }
 
 /* Hide scrollbar defaults, customized scrollbar */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(0, 0, 0, 0.2);
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(6, 182, 212, 0.15);
   border-radius: 10px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(6, 182, 212, 0.4);
 }
 
-/* Animations */
+/* Glow animations */
 @keyframes pulse-glow {
   0%, 100% {
-    box-shadow: 0 0 10px rgba(99, 102, 241, 0.15);
+    box-shadow: 0 0 8px rgba(6, 182, 212, 0.25);
+    border-color: rgba(6, 182, 212, 0.3);
   }
   50% {
-    box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+    box-shadow: 0 0 20px rgba(6, 182, 212, 0.7);
+    border-color: rgba(6, 182, 212, 0.8);
   }
 }
 
 .glow-active {
-  animation: pulse-glow 2s infinite ease-in-out;
+  animation: pulse-glow 2.5s infinite ease-in-out;
+}
+
+/* Ambient glow coordinates behind canvas */
+.ambient-glow-cyan {
+  position: absolute;
+  width: 450px;
+  height: 450px;
+  background: radial-gradient(circle, rgba(6, 182, 212, 0.05) 0%, rgba(6, 182, 212, 0) 70%);
+  filter: blur(80px);
+  pointer-events: none;
+}
+
+.ambient-glow-violet {
+  position: absolute;
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(139, 92, 246, 0.05) 0%, rgba(139, 92, 246, 0) 70%);
+  filter: blur(90px);
+  pointer-events: none;
+}
+
+.cyber-grid {
+  background-image: radial-gradient(rgba(6, 182, 212, 0.08) 1.5px, transparent 1.5px);
+  background-size: 32px 32px;
 }
 
