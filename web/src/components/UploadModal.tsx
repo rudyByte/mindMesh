@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Upload, X, FileText, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { API_BASE_URL } from '../config';
@@ -21,7 +21,28 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const updateDocumentStatus = useStore((state) => state.updateDocumentStatus);
   const setGraphData = useStore((state) => state.setGraphData);
   const setActiveDocumentId = useStore((state) => state.setActiveDocumentId);
+  const setSelectedNode = useStore((state) => state.setSelectedNode);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Reset state on open if previously completed or failed
+  useEffect(() => {
+    if (isOpen && (uploadState === 'done' || uploadState === 'error')) {
+      setUploadState('idle');
+      setProgress(0);
+      setErrorMsg('');
+      setFileName('');
+    }
+  }, [isOpen]);
+
+  // Clean up polling interval on unmount
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
+  }, []);
 
   if (!isOpen) return null;
 
@@ -101,7 +122,11 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
   };
 
   const pollStatus = (docId: string) => {
-    let intervalId = setInterval(async () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+
+    intervalRef.current = setInterval(async () => {
       try {
         const response = await fetch(`${API_BASE_URL}/documents/${docId}/status`);
         if (!response.ok) {
@@ -125,7 +150,10 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
         if (status === 'done') {
           setUploadState('done');
           setProgress(100);
-          clearInterval(intervalId);
+          if (intervalRef.current) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+          }
           
           // Set active document ID now that it's successfully done!
           setActiveDocumentId(docId);
@@ -153,16 +181,28 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
               nodes: validatedNodes,
               edges: validatedEdges
             });
+
+            // Automatically select the central Topic node of the newly uploaded document
+            const topicNode = validatedNodes.find((n: any) => n.label === 'Topic');
+            if (topicNode) {
+              setSelectedNode(topicNode);
+            }
           }
         } else if (status === 'error') {
           setUploadState('error');
           setErrorMsg(error || 'Graph extraction failed.');
-          clearInterval(intervalId);
+          if (intervalRef.current) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+          }
         }
       } catch (err: any) {
         setUploadState('error');
         setErrorMsg(err.message ? `Polling status failed: ${err.message}` : 'Polling status failed.');
-        clearInterval(intervalId);
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
       }
     }, 2000);
   };

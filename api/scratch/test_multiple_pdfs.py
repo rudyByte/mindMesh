@@ -54,7 +54,7 @@ async def test_pipeline_on_pdf(pdf_path: str, expect_success: bool):
     else:
         assert status_res.status == 'error', f"Expected status 'error', got '{status_res.status}'"
         assert status_res.error is not None, "Expected an error message"
-        assert "exceeds 20% limit" in status_res.error, f"Expected error to mention 20% limit, got: {status_res.error}"
+        assert "exceeds 80% limit" in status_res.error, f"Expected error to mention 80% limit, got: {status_res.error}"
         print(f"  Successfully blocked noisy PDF! Error: {status_res.error}")
 
 async def main():

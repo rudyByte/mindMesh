@@ -129,6 +129,14 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
       if (response.ok) {
         const data = await response.json();
         setGraphData(data);
+
+        // Automatically select the central Topic node of the selected document
+        const topicNode = (data.nodes || []).find((n: any) => n.label === 'Topic');
+        if (topicNode) {
+          setSelectedNode(topicNode);
+        } else {
+          setSelectedNode(null);
+        }
       }
     } catch (err) {
       console.error('Failed to load document graph', err);
@@ -607,7 +615,7 @@ export function RightSidebar() {
     if (!selectedNode || selectedNode.label !== 'Concept') return;
     setPathGenerating(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/learning-path?target=${selectedNode.id}`);
+      const response = await fetch(`${API_BASE_URL}/learning-path?target=${selectedNode.id}&document_id=${activeDocumentId || 'doc-1'}`);
       if (response.ok) {
         const data = await response.json();
         appendGraphData({ nodes: data.nodes, edges: data.edges });
@@ -636,7 +644,7 @@ export function RightSidebar() {
     };
     setSelectedNode(clickedNode);
     try {
-      const response = await fetch(`${API_BASE_URL}/graph/node/${stepNode.id}`);
+      const response = await fetch(`${API_BASE_URL}/graph/node/${stepNode.id}?document_id=${activeDocumentId || 'doc-1'}`);
       if (response.ok) {
         const detailsData = await response.json();
         setSelectedNode(detailsData);

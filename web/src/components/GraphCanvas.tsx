@@ -259,10 +259,10 @@ export default function GraphCanvas() {
       degrees[n.id] = 0;
     });
     validatedGraphData.links.forEach(e => {
-      const fromId = e.source;
-      const toId = e.target;
-      if (degrees[fromId] !== undefined) degrees[fromId]++;
-      if (degrees[toId] !== undefined) degrees[toId]++;
+      const fromId = typeof e.source === 'object' && e.source !== null ? (e.source as any).id : e.source;
+      const toId = typeof e.target === 'object' && e.target !== null ? (e.target as any).id : e.target;
+      if (fromId && degrees[fromId] !== undefined) degrees[fromId]++;
+      if (toId && degrees[toId] !== undefined) degrees[toId]++;
     });
     return degrees;
   }, [validatedGraphData]);
@@ -350,31 +350,30 @@ export default function GraphCanvas() {
     };
     setSelectedNode(clickedNode);
     setLoading(true);
-    setCanvasError(null);
+    // Do not clear canvas error here to keep the current graph visible
 
     try {
       // Fetch full details of the clicked node
-      const detailsUrl = `${API_BASE_URL}/graph/node/${node.id}`;
+      const detailsUrl = `${API_BASE_URL}/graph/node/${node.id}?document_id=${activeDocumentId || 'doc-1'}`;
       const detailsRes = await fetch(detailsUrl);
       if (detailsRes.ok) {
         const detailsData = await detailsRes.json();
         setSelectedNode(detailsData);
       } else {
-        setCanvasError(`Failed to load node details (HTTP ${detailsRes.status})`);
+        console.error(`Failed to load node details (HTTP ${detailsRes.status})`);
       }
 
       // Fetch dynamic node expansion
-      const url = `${API_BASE_URL}/graph/expand?node_id=${node.id}&depth=${graphDepth}&mode=${graphMode}`;
+      const url = `${API_BASE_URL}/graph/expand?node_id=${node.id}&depth=${graphDepth}&mode=${graphMode}&document_id=${activeDocumentId || 'doc-1'}`;
       const response = await fetch(url);
       if (response.ok) {
         const expandedData = await response.json();
         appendGraphData(expandedData);
       } else {
-        setCanvasError(`Failed to expand node (HTTP ${response.status})`);
+        console.error(`Failed to expand node (HTTP ${response.status})`);
       }
     } catch (err: any) {
       console.error('Failed to expand/retrieve node details', err);
-      setCanvasError(err.message || 'API connection failed during expansion');
     } finally {
       setLoading(false);
     }

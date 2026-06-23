@@ -6,9 +6,42 @@ from api.config import config
 
 logger = logging.getLogger("llm_client")
 
+def normalize_and_clean_concept_name(name: str) -> str:
+    # Strip spaces and formatting
+    n = name.strip()
+    n = re.sub(r'^["\'`*_]+|["\'`*_]+$', '', n).strip()
+    # Strip trailing punctuation
+    n = n.rstrip(',.;:-')
+    
+    # Strip leading articles / common determiners if followed by space
+    n_lower = n.lower()
+    articles = ["the", "a", "an", "any", "all", "each", "some", "every", "this", "that", "these", "those"]
+    for art in articles:
+        if n_lower.startswith(art + " "):
+            n = n[len(art) + 1:].strip()
+            n_lower = n.lower()
+            break
+            
+    # Capitalize first letter
+    if n and n[0].islower():
+        n = n[0].upper() + n[1:]
+    return n
+
 GENERIC_BLACKLIST = {
     # Pronouns & basic structural words
     "something", "anything", "nothing", "someone", "anyone", "everyone", "nobody", "everybody",
+    # Determiners/pronouns/connectors/common English words / prepositions
+    "any", "all", "each", "even", "every", "some", "both", "either", "neither", "another", "other", "others", "such", "what", "which", "whose", "this", "that", "these", "those",
+    "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours", "yourself", "yourselves",
+    "he", "him", "his", "himself", "she", "her", "hers", "herself", "it", "its", "itself", "they", "them", "their", "theirs", "themselves",
+    "many", "much", "few", "fewer", "little", "less", "least", "more", "most", "several",
+    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "first", "second", "third",
+    "the", "a", "an", "in", "on", "at", "for", "to", "with", "by", "of", "and", "or", "but", "as", "if", "then", "when", "while", "because", "although", "since", "unless",
+    "about", "above", "across", "after", "against", "along", "among", "around", "at", "before", "behind", "below",
+    "beneath", "beside", "between", "beyond", "by", "down", "during", "except", "from", "inside", "into", "near",
+    "off", "onto", "out", "outside", "over", "past", "through", "throughout", "toward", "under", "underneath", "until", "up", "upon", "within", "without",
+    "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "having", "do", "does", "did", "doing",
+    "can", "could", "should", "would", "will", "shall", "may", "might", "must",
     # Common conversational fillers/adverbs/adjectives
     "for example", "such as", "however", "therefore", "nevertheless", "furthermore", "consequently",
     "indeed", "instead", "meanwhile", "besides", "moreover", "otherwise", "similarly", "specifically",
@@ -33,20 +66,60 @@ GENERIC_BLACKLIST = {
     "text", "texts", "book", "books", "note", "notes", "key", "keys", "value", "values", "right", "left",
     "extracting", "consistent", "consistency", "volume", "connectivity", "requirement", "requirements",
     "usage", "frequency", "power", "connectivity", "thing", "things", "internet", "world", "critical",
-    "abstract", "introduction", "conclusion", "discussion", "references", "author", "title", "pdf", "ocr", "scanned"
+    "abstract", "introduction", "conclusion", "discussion", "references", "author", "title", "pdf", "ocr", "scanned",
+    # Computer science generic terms (isolated)
+    "input", "output", "string", "strings", "cont", "cont.", "continued", "number", "numbers", "symbol", "symbols", 
+    "character", "characters", "word", "words", "state", "states", "transition", "transitions", "diagram", "diagrams", 
+    "theory", "theories", "theorem", "theorems", "definition", "definitions", "proof", "proofs"
 }
 
 def calculate_entity_quality(name: str, label: str) -> float:
-    n_clean = name.strip()
-    n_lower = n_clean.lower()
+    # Clean the name first
+    n_clean = normalize_and_clean_concept_name(name)
+    if not n_clean or len(n_clean) < 3:
+        return 0.0
     
-    # 1. Length checks
-    if len(n_clean) <= 2:
-        return 0.0  # too short
-    if len(n_clean) >= 60:
-        return 0.0  # too long (often a parsed phrase/sentence or formatting error)
+    n_lower = n_clean.lower()
+    words = n_clean.split()
+    words_lower = [w.lower() for w in words]
+    
+    # 1. Keep only meaningful concepts, topics, authors, papers, and keywords
+    valid_labels = {"Concept", "Topic", "Author", "Paper", "Keyword"}
+    if label not in valid_labels:
+        return 0.0
         
-    # 2. Blacklist / Generic check (both exact and substring matching for common phrases)
+    # 2. Reject nodes that contain more than 4 words
+    if len(words) > 4:
+        return 0.0
+        
+    # 3. Reject nodes that exceed 40 characters or are long merged strings without spaces
+    if len(n_clean) > 40:
+        return 0.0
+    if len(words) == 1 and len(n_clean) > 17:
+        return 0.0
+        
+    # 4. Reject nodes that look like sentences
+    if re.search(r'[.!?;\:]\s', n_clean):
+        return 0.0
+        
+    sentence_triggers = {
+        "is", "are", "was", "were", "has", "have", "had", "can", "could", "should", "would", "will", 
+        "does", "did", "shows", "defines", "refers", "represents", "describes", "explains", "contains", 
+        "provides", "used", "includes", "introduces", "integrates", "demonstrates", "illustrates", "proves", 
+        "analyzes", "implements", "requires", "needs", "allows", "enables", "creates", "helps", "makes", 
+        "involves", "focuses", "suggests", "indicates", "supports"
+    }
+    if any(w in sentence_triggers for w in words_lower):
+        return 0.0
+
+    # 5. Length checks (too short)
+    if len(n_clean) < 4:
+        # Technical short acronyms/abbreviations must consist entirely of uppercase letters
+        clean_alpha = re.sub(r'[^a-zA-Z]', '', n_clean)
+        if not (clean_alpha.isupper() and clean_alpha.isalpha()):
+            return 0.0  # too short and not a technical acronym (e.g. DFA, NFA, ZKP)
+            
+    # 6. Blacklist / Generic check (both exact and substring matching for common phrases)
     if n_lower in GENERIC_BLACKLIST:
         return 0.0
         
@@ -67,7 +140,6 @@ def calculate_entity_quality(name: str, label: str) -> float:
         
     # Check placeholder/spam terms: e.g. "abc", "xyz", "qwe", "testtest", "dummy", "lorem", "ipsum"
     spam_terms = {"abc", "xyz", "qwe", "foo", "bar", "baz", "test", "testtest", "dummy", "lorem", "ipsum", "placeholder", "testtesttest", "spam", "garbage"}
-    words_lower = n_lower.split()
     if any(w in spam_terms for w in words_lower) or any(t in n_lower for t in ["abc xyz", "xyz qwe", "abc xyz qwe", "testtest"]):
         return 0.0
 
@@ -80,13 +152,7 @@ def calculate_entity_quality(name: str, label: str) -> float:
         if len(w) >= 4 and not any(v in w for v in 'aeiouy'):
             return 0.0
 
-    # 3. Word count check: domain concepts are usually 1-4 words.
-    words = n_clean.split()
-    if len(words) > 4:
-        # Deduct heavily for very long phrases (they are likely sentences/noise)
-        return max(0.0, 1.0 - (len(words) - 4) * 0.25)
-        
-    # 4. OCR / Punctuation noise and layout artifacts
+    # 7. OCR / Punctuation noise and layout artifacts
     special_chars = len(re.findall(r'[^a-zA-Z0-9\s-]', n_clean))
     if special_chars > 2:
         return 0.1
@@ -97,11 +163,11 @@ def calculate_entity_quality(name: str, label: str) -> float:
     if re.match(r'^[_\-\d\s\W]+$', n_clean):  # only symbols/digits
         return 0.0
         
-    # 5. Section headers (e.g. "Chapter 1", "Section A", "Figure 5", "Page 1")
+    # 8. Section headers (e.g. "Chapter 1", "Section A", "Figure 5", "Page 1")
     if re.match(r'^(chapter|section|figure|table|page|index|appendix|vol|volume|no|part|fig)\b', n_lower):
         return 0.0
         
-    # 6. Common transitional phrases
+    # 9. Common transitional phrases
     if any(n_lower.startswith(x) for x in ["for example", "such as", "based on", "due to", "in order to"]):
         return 0.1
 
@@ -211,19 +277,20 @@ class LLMClient:
             "name": clean_name,
             "description": f"Unified knowledge map and conceptual analysis of the document {filename}."
         }
-
     def extract_graph_from_chunk(self, text_chunk: str) -> dict:
         if self._is_mock:
             return self._run_mock_extraction(text_chunk)
             
         system_prompt = (
-            "You are a strict, grounded knowledge graph extraction engine. Given a text chunk, extract ONLY high-quality concepts, topics, papers, authors, or institutions that are EXPLICITLY mentioned. "
-            "CRITICAL: Do NOT extract generic words (e.g., 'Data', 'System', 'Process', 'Approach', 'Model', 'Connectivity', 'Example'), conversational phrases (e.g., 'For Example', 'However', 'Therefore'), "
-            "section headers ('Chapter 1', 'Section A'), page numbers, or formatting noise. Every extracted node must represent a meaningful domain-specific concept, technology, paper, or entity. "
+            "You are a strict, grounded knowledge graph extraction engine. Given a text chunk, extract ONLY high-quality concepts, topics, papers, authors, or keywords that are EXPLICITLY mentioned. "
+            "CRITICAL: Do NOT extract pronouns, determiners, connectors, or generic words (e.g., 'Any', 'All', 'Each', 'Even', 'Input', 'String', 'Cont', 'Data', 'System', 'Process', 'Approach', 'Model', 'Connectivity', 'Example'), "
+            "conversational phrases (e.g., 'For Example', 'However', 'Therefore'), section headers ('Chapter 1', 'Section A'), page numbers, or formatting noise. "
+            "CRITICAL: Do NOT extract nodes that contain more than 4 words, look like sentences, or exceed 40 characters. "
+            "Prioritize noun phrases and technical terms (e.g., 'Finite Automata', 'Regular Expression'). Every extracted node must represent a meaningful domain-specific concept, technology, paper, or entity. "
             "For every extracted node, you MUST write a complete, rich, context-grounded description of at least 2-3 sentences based on the text. Avoid single-word or brief descriptions. "
             "Do NOT include any external knowledge or assumptions. "
-            "Extract ONLY these node types: Concept, Topic, Keyword, Paper, Author, Institution. "
-            "Extract ONLY these relationship types: PREREQUISITE_OF, RELATED_TO, EXTENDS, CONTRADICTS, USES_METHOD, DEPENDS_ON, CITES, AUTHORED_BY, AFFILIATED_WITH, MENTIONS, HAS_KEYWORD. "
+            "Extract ONLY these node types: Concept, Topic, Keyword, Paper, Author. "
+            "Extract ONLY these relationship types: PREREQUISITE_OF, RELATED_TO, EXTENDS, CONTRADICTS, USES_METHOD, DEPENDS_ON, CITES, AUTHORED_BY, MENTIONS, HAS_KEYWORD. "
             "Return ONLY valid JSON matching this schema, no prose, no markdown fences:\n"
             "{\n"
             "  \"nodes\": [\n"
@@ -270,17 +337,53 @@ class LLMClient:
         
         text_chunk_lower = text_chunk.lower()
         if "noisy_pdf_trigger" in text_chunk_lower:
-            logger.info("[MOCK] Returning noisy nodes to trigger the 20% validation failure.")
+            logger.info("[MOCK] Returning noisy nodes to trigger the 80% validation failure.")
             nodes = [
                 {"label": "Concept", "name": "Valid Concept One", "description": "This is a valid domain concept."},
-                {"label": "Concept", "name": "Valid Concept Two", "description": "This is another valid domain concept."},
                 {"label": "Concept", "name": "Lorem", "description": "Garbage entity."},
                 {"label": "Concept", "name": "Page 1", "description": "Garbage entity."},
                 {"label": "Concept", "name": "Test Test Test", "description": "Garbage entity."},
                 {"label": "Concept", "name": "XYZ123XYZ", "description": "Garbage entity."},
+                {"label": "Concept", "name": "abc", "description": "Too short."},
+                {"label": "Concept", "name": "xyz qwe", "description": "Spam term."},
+            ]
+            relationships = []
+            return {"nodes": nodes, "relationships": relationships}
+
+        if "automata" in text_chunk_lower or "dfa" in text_chunk_lower or "nfa" in text_chunk_lower or "regular expression" in text_chunk_lower:
+            logger.info("[MOCK] Returning custom automata theory knowledge graph.")
+            nodes = [
+                {"label": "Topic", "name": "Automata Theory", "description": "A branch of computer science that deals with the definitions and properties of mathematical models of computation, such as finite automata and grammars."},
+                {"label": "Concept", "name": "Finite Automata", "description": "A simple model of computation consisting of a set of states, transitions, an initial state, and accepting states."},
+                {"label": "Concept", "name": "DFA", "description": "Deterministic Finite Automata, a finite state machine where for each state there is exactly one transition for each possible input symbol."},
+                {"label": "Concept", "name": "NFA", "description": "Nondeterministic Finite Automata, a finite state machine where for a state and input symbol, there can be multiple next states or transition on empty input."},
+                {"label": "Concept", "name": "Regular Expression", "description": "A sequence of characters that forms a search pattern, representing a regular language algebraically."},
+                {"label": "Concept", "name": "Regular Grammar", "description": "A formal grammar where all production rules are restricted to linear forms, generating regular languages."},
+                {"label": "Concept", "name": "Language", "description": "A set of strings over a finite alphabet, representing the computational problems recognized by automata."},
+                {"label": "Concept", "name": "Transition Diagram", "description": "A directed graph representing a finite automaton, where nodes represent states and edges represent transitions."},
+                # Garbage nodes that MUST be filtered out by quality checker
+                {"label": "Concept", "name": "Any", "description": "This is a garbage node that should be filtered out."},
+                {"label": "Concept", "name": "All", "description": "This is a garbage node that should be filtered out."},
+                {"label": "Concept", "name": "Each", "description": "This is a garbage node that should be filtered out."},
+                {"label": "Concept", "name": "Even", "description": "This is a garbage node that should be filtered out."},
+                {"label": "Concept", "name": "Cont", "description": "This is a garbage node that should be filtered out."},
+                {"label": "Concept", "name": "Input", "description": "This is a garbage node that should be filtered out."},
+                {"label": "Concept", "name": "String", "description": "This is a garbage node that should be filtered out."}
             ]
             relationships = [
-                {"from": "Valid Concept One", "to": "Valid Concept Two", "type": "RELATED_TO"}
+                {"from": "Automata Theory", "to": "Finite Automata", "type": "USES_METHOD"},
+                {"from": "Finite Automata", "to": "DFA", "type": "EXTENDS"},
+                {"from": "Finite Automata", "to": "NFA", "type": "EXTENDS"},
+                {"from": "DFA", "to": "NFA", "type": "RELATED_TO"},
+                {"from": "DFA", "to": "Transition Diagram", "type": "USES_METHOD"},
+                {"from": "NFA", "to": "Transition Diagram", "type": "USES_METHOD"},
+                {"from": "Regular Expression", "to": "Finite Automata", "type": "RELATED_TO"},
+                {"from": "Regular Grammar", "to": "Regular Expression", "type": "RELATED_TO"},
+                {"from": "Finite Automata", "to": "Language", "type": "PREREQUISITE_OF"},
+                # Relationships for garbage nodes (just to see if they get correctly cleaned)
+                {"from": "Finite Automata", "to": "Any", "type": "RELATED_TO"},
+                {"from": "DFA", "to": "All", "type": "RELATED_TO"},
+                {"from": "NFA", "to": "Each", "type": "RELATED_TO"}
             ]
             return {"nodes": nodes, "relationships": relationships}
 

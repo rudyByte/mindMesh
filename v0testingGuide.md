@@ -68,7 +68,7 @@ Validate that clean documents ingest successfully while noisy ones are blocked b
    ```
 2. Verify output results:
    - **Clean Ingestion (`test_machine_learning.pdf`)**: Passes checks and completes with `done` status. Generates concepts, papers, and authors in Neo4j.
-   - **Noisy Ingestion (`test_noisy.pdf`)**: Correctly halts with `error` status and fails the validation check, showing that more than 20% of extracted terms were marked as low-quality.
+   - **Noisy Ingestion (`test_noisy.pdf`)**: Correctly halts with `error` status and fails the validation check, showing that more than 80% of extracted terms were marked as low-quality.
 
 ---
 
@@ -194,14 +194,14 @@ Verify writing custom notes and filtering links in the left pane.
 4. Type *"feedforward"* in the **Search notes & links...** input box above the composer.
    - *(Expected Result)*: The notes list is filtered in real-time, displaying only matching notes. Clear the search text to restore the list.
 
-### Scenario I: 20% Quality Gate Blocker Test
+### Scenario I: 80% Quality Gate Blocker Test
 Verify that the system halts ingestion if the uploaded file is spam/noisy.
 1. Click **Ingest Document** in the Left Sidebar.
 2. Drag and drop the noisy testing PDF (`test_assets/test_noisy.pdf`) or upload it.
 3. Click Upload.
 4. Watch the progress bar reach approximately 40-50% during entity extraction.
 5. *(Expected Result)*: The progress modal will halt and display a red error message:
-   > Graph extraction validation failed: 60.0% of extracted terms are low-quality (exceeds 20% limit). Examples of low-quality terms: For Example, Data, Page 12.
+   > Graph extraction validation failed: 85.7% of extracted terms are low-quality (exceeds 80% limit). Examples of low-quality terms: Lorem, Page 1, Test Test Test, XYZ123XYZ, abc
 6. Close the modal. Check the Documents Queue in the left sidebar; the noisy document will show a red error indicator status, and the main graph remains untouched.
 
 ### Scenario J: Cyber Visual Theme Checkpoints

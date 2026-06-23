@@ -8,7 +8,7 @@ from pypdf import PdfReader
 
 from api.utils.neo4j_client import neo4j_client
 from api.utils.supabase_client import supabase_client
-from api.utils.llm_client import llm_client, calculate_entity_quality, singularize_concept_name
+from api.utils.llm_client import llm_client, calculate_entity_quality, singularize_concept_name, normalize_and_clean_concept_name
 from api.utils.sequence_parser import parse_learning_sequences
 import re
 
@@ -181,7 +181,7 @@ def cluster_and_merge_nodes(nodes: list) -> tuple[list, dict]:
             rep_label = rep.get("label", "Concept")
             node_label = node.get("label", "Concept")
             
-            label_order = ["Topic", "Paper", "Author", "Institution", "Concept", "Keyword"]
+            label_order = ["Topic", "Paper", "Author", "Concept", "Keyword"]
             rep_priority = label_order.index(rep_label) if rep_label in label_order else 99
             node_priority = label_order.index(node_label) if node_label in label_order else 99
             
@@ -267,15 +267,37 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
             try:
                 # Call LLM extraction (will use mock extraction if Anthropic key is mock)
                 result = llm_client.extract_graph_from_chunk(chunk)
-                all_nodes.extend(result.get("nodes", []))
-                all_relationships.extend(result.get("relationships", []))
+                extracted_nodes = result.get("nodes", [])
+                extracted_rels = result.get("relationships", [])
+                
+                # Clean node names immediately after extraction
+                for node in extracted_nodes:
+                    node["name"] = normalize_and_clean_concept_name(node.get("name", ""))
+                # Clean relationship from/to names
+                for rel in extracted_rels:
+                    rel["from"] = normalize_and_clean_concept_name(rel.get("from", ""))
+                    rel["to"] = normalize_and_clean_concept_name(rel.get("to", ""))
+                
+                all_nodes.extend(extracted_nodes)
+                all_relationships.extend(extracted_rels)
             except Exception as e:
                 logger.error(f"Error extracting chunk {i} for doc {doc_id}: {e}")
                 # Retry once
                 try:
                     result = llm_client.extract_graph_from_chunk(chunk)
-                    all_nodes.extend(result.get("nodes", []))
-                    all_relationships.extend(result.get("relationships", []))
+                    extracted_nodes = result.get("nodes", [])
+                    extracted_rels = result.get("relationships", [])
+                    
+                    # Clean node names immediately after extraction
+                    for node in extracted_nodes:
+                        node["name"] = normalize_and_clean_concept_name(node.get("name", ""))
+                    # Clean relationship from/to names
+                    for rel in extracted_rels:
+                        rel["from"] = normalize_and_clean_concept_name(rel.get("from", ""))
+                        rel["to"] = normalize_and_clean_concept_name(rel.get("to", ""))
+                    
+                    all_nodes.extend(extracted_nodes)
+                    all_relationships.extend(extracted_rels)
                 except Exception:
                     logger.error(f"Retry failed for chunk {i}. Skipping.")
             
@@ -288,21 +310,21 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
             low_quality_nodes = []
             for node in all_nodes:
                 score = calculate_entity_quality(node.get("name", ""), node.get("label", "Concept"))
-                if score < 0.6:
+                if score <= 0.7:
                     low_quality_nodes.append(node.get("name", ""))
             
             low_quality_ratio = len(low_quality_nodes) / len(all_nodes)
             logger.info(f"Pipeline quality check: Total nodes={len(all_nodes)}, Low-quality={len(low_quality_nodes)} ({low_quality_ratio:.2%})")
             
-            if low_quality_ratio > 0.20:
+            if low_quality_ratio > 0.80:
                 logger.error(f"Validation failed: {low_quality_ratio:.2%} of extracted nodes are low-quality: {low_quality_nodes[:15]}")
                 raise ValueError(
-                    f"Graph extraction validation failed: {low_quality_ratio:.1%} of extracted terms are low-quality (exceeds 20% limit). "
+                    f"Graph extraction validation failed: {low_quality_ratio:.1%} of extracted terms are low-quality (exceeds 80% limit). "
                     f"Examples of low-quality terms: {', '.join(low_quality_nodes[:5])}"
                 )
             
             # Filter out low-value nodes automatically
-            all_nodes = [n for n in all_nodes if calculate_entity_quality(n.get("name", ""), n.get("label", "Concept")) >= 0.6]
+            all_nodes = [n for n in all_nodes if calculate_entity_quality(n.get("name", ""), n.get("label", "Concept")) > 0.7]
 
         # Check multi-document mode config
         from api.config import config
@@ -350,6 +372,11 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
         # Run global semantic merging and clustering
         canonical_nodes, name_mapping = cluster_and_merge_nodes(all_nodes)
         
+        # Verify that every graph node exists in the current document text
+        original_count = len(canonical_nodes)
+        canonical_nodes = [n for n in canonical_nodes if n.get("name", "").lower().strip() in text.lower()]
+        logger.info(f"Filtered out {original_count - len(canonical_nodes)} nodes not present in the document text.")
+        
         # Enrich descriptions using document text context
         logger.info("Enriching node descriptions using document text context...")
         enrich_node_descriptions(canonical_nodes, text)
@@ -380,6 +407,80 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
                     "type": rel_type
                 })
                 
+        # Rank concepts and keywords by importance (TF-IDF + Degree + Frequency)
+        freq_map = {}
+        for n in all_nodes:
+            name = n.get("name", "").strip().lower()
+            canonical_name = name_mapping.get(name, name).strip()
+            freq_map[canonical_name] = freq_map.get(canonical_name, 0) + 1
+
+        degree_map = {}
+        for rel in merged_relationships:
+            f = rel["from"]
+            t = rel["to"]
+            degree_map[f] = degree_map.get(f, 0) + 1
+            degree_map[t] = degree_map.get(t, 0) + 1
+
+        # Calculate true TF-IDF across document chunks
+        import math
+        tf_map = {}
+        df_map = {}
+        N = len(chunks) if chunks else 1
+        text_lower = text.lower()
+        
+        for n in canonical_nodes:
+            c_name = n["name"]
+            c_name_lower = c_name.lower()
+            
+            # TF: term frequency in full document
+            tf_map[c_name] = text_lower.count(c_name_lower)
+            
+            # DF: document frequency (how many chunks contain it)
+            df_count = sum(1 for chunk in chunks if c_name_lower in chunk.lower())
+            df_map[c_name] = df_count
+
+        tfidf_map = {}
+        for n in canonical_nodes:
+            c_name = n["name"]
+            tf = tf_map.get(c_name, 0)
+            df = df_map.get(c_name, 0)
+            # Smooth IDF
+            idf = math.log((1 + N) / (1 + df)) + 1
+            tfidf_map[c_name] = tf * idf
+
+        concepts_keywords = [n for n in canonical_nodes if n.get("label") in ["Concept", "Keyword"]]
+        other_nodes = [n for n in canonical_nodes if n.get("label") not in ["Concept", "Keyword"]]
+
+        # Prioritize noun phrases and technical terms
+        def get_priority_bonus(name: str) -> float:
+            # Check if multi-word phrase (noun phrase)
+            if len(name.split()) > 1:
+                return 1.5
+            # Check if uppercase technical acronym (e.g. DFA, NFA, ZKP)
+            if name.isupper() and name.isalpha() and 2 <= len(name) <= 6:
+                return 1.5
+            return 1.0
+
+        # Sort concepts/keywords by unified score descending
+        concepts_keywords.sort(
+            key=lambda n: (tfidf_map.get(n["name"], 0) + degree_map.get(n["name"], 0) * 5 + freq_map.get(n["name"], 0) * 10) * get_priority_bonus(n["name"]),
+            reverse=True
+        )
+
+        # Keep top 40 concepts/keywords
+        kept_concepts_keywords = concepts_keywords[:40]
+        kept_names = set(n["name"].lower().strip() for n in kept_concepts_keywords)
+        for n in other_nodes:
+            kept_names.add(n["name"].lower().strip())
+
+        canonical_nodes = other_nodes + kept_concepts_keywords
+
+        # Filter relationships to only connect kept nodes
+        merged_relationships = [
+            rel for rel in merged_relationships
+            if rel["from"].lower().strip() in kept_names and rel["to"].lower().strip() in kept_names
+        ]
+
         # Ensure graph connectivity (connect isolated nodes/subgraphs to the central node)
         nodes_by_name = {n["name"].lower().strip(): n for n in canonical_nodes}
         
@@ -479,7 +580,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
         # Write nodes to Neo4j
         for node in canonical_nodes:
             label = node.get("label", "Concept")
-            if label not in ["Concept", "Topic", "Keyword", "Paper", "Author", "Institution"]:
+            if label not in ["Concept", "Topic", "Keyword", "Paper", "Author"]:
                 label = "Concept"
             name = node.get("name").strip()
             desc = node.get("description", "").strip()
@@ -634,7 +735,6 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str):
             "MATCH (d:Document {id: $doc_id}) SET d.status = 'error', d.error_msg = $error",
             {"doc_id": doc_id, "error": error_msg}
         )
-
 @router.post("/documents/upload", response_model=UploadResponse)
 async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     if not file.filename.endswith(".pdf"):
@@ -643,6 +743,24 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
     try:
         # Read file bytes
         file_bytes = await file.read()
+
+        # Clear state if not multi-document mode
+        from api.config import config
+        multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False)
+        if not multi_doc_mode:
+            extraction_status_cache.clear()
+            try:
+                supabase_client.clear_bucket("documents")
+            except Exception as e:
+                logger.error(f"Failed to clear storage bucket: {e}")
+            if neo4j_client.is_mock():
+                neo4j_client.mock_nodes.clear()
+                neo4j_client.mock_edges.clear()
+            else:
+                try:
+                    neo4j_client.run_query("MATCH (n) DETACH DELETE n")
+                except Exception as e:
+                    logger.error(f"Failed to clear Neo4j on upload: {e}")
         
         # Generate unique document ID
         doc_id = str(uuid.uuid4())

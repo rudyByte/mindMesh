@@ -316,35 +316,99 @@ class Neo4jClient:
                 target_id = params.get("id") or params.get("node_id")
                 depth = params.get("depth", 1)
                 mode = params.get("mode", "basic")
+                doc_id = params.get("doc_id") or params.get("document_id")
                 
                 nodes_to_return = {}
                 edges_to_return = []
                 
-                if target_id in self.mock_nodes:
+                # Retrieve valid node IDs for this document
+                doc_node_ids = set()
+                if doc_id:
+                    if doc_id == "doc-1":
+                        for nid, n in self.mock_nodes.items():
+                            if n.get("label") != "Document":
+                                doc_node_ids.add(nid)
+                    else:
+                        for edge in self.mock_edges:
+                            if edge["from"] == doc_id and edge["type"] == "CONTAINS":
+                                doc_node_ids.add(edge["to"])
+                        for nid, n in self.mock_nodes.items():
+                            if n.get("doc_id") == doc_id:
+                                doc_node_ids.add(nid)
+                else:
+                    doc_node_ids = set(self.mock_nodes.keys())
+
+                if target_id in self.mock_nodes and target_id in doc_node_ids:
                     nodes_to_return[target_id] = self.mock_nodes[target_id]
                 
                 for edge in self.mock_edges:
+                    if edge["type"] == "CONTAINS":
+                        continue
                     if mode == "basic" and edge["type"] != "PREREQUISITE_OF":
                         continue
-                    if edge["from"] == target_id or edge["to"] == target_id:
-                        from_node = self.mock_nodes.get(edge["from"])
-                        to_node = self.mock_nodes.get(edge["to"])
-                        if from_node and to_node:
-                            nodes_to_return[edge["from"]] = from_node
-                            nodes_to_return[edge["to"]] = to_node
-                            edges_to_return.append(edge)
+                    if edge["from"] in doc_node_ids and edge["to"] in doc_node_ids:
+                        if edge["from"] == target_id or edge["to"] == target_id:
+                            from_node = self.mock_nodes.get(edge["from"])
+                            to_node = self.mock_nodes.get(edge["to"])
+                            if from_node and to_node:
+                                nodes_to_return[edge["from"]] = from_node
+                                nodes_to_return[edge["to"]] = to_node
+                                edges_to_return.append(edge)
 
                 return [{"nodes": list(nodes_to_return.values()), "edges": edges_to_return}]
 
             # Document Contains subgraph
             if "DOCUMENT" in query_upper and "CONTAINS" in query_upper:
-                return [{"nodes": list(self.mock_nodes.values()), "edges": self.mock_edges}]
+                doc_id = params.get("doc_id") or params.get("document_id") or "doc-1"
+                doc_node_ids = set()
+                if doc_id == "doc-1":
+                    for nid, n in self.mock_nodes.items():
+                        if n.get("label") != "Document":
+                            doc_node_ids.add(nid)
+                else:
+                    for edge in self.mock_edges:
+                        if edge["from"] == doc_id and edge["type"] == "CONTAINS":
+                            doc_node_ids.add(edge["to"])
+                    for nid, n in self.mock_nodes.items():
+                        if n.get("doc_id") == doc_id:
+                            doc_node_ids.add(nid)
+                
+                doc_nodes = []
+                for nid, n in self.mock_nodes.items():
+                    if nid in doc_node_ids:
+                        n_copy = dict(n)
+                        if not n_copy.get("name") and n_copy.get("title"):
+                            n_copy["name"] = n_copy["title"]
+                        doc_nodes.append(n_copy)
+                
+                doc_edges = [
+                    e for e in self.mock_edges 
+                    if e["type"] != "CONTAINS" and e["from"] in doc_node_ids and e["to"] in doc_node_ids
+                ]
+                return [{"nodes": doc_nodes, "edges": doc_edges}]
             
             # Fetch single node details by ID
             if "ID" in query_upper and "DOCUMENT" not in query_upper:
                 node_id = params.get("id") or params.get("node_id")
+                doc_id = params.get("doc_id") or params.get("document_id")
                 if node_id and node_id in self.mock_nodes:
                     n = self.mock_nodes[node_id]
+                    
+                    # Validate doc_id ownership in mock if doc_id/document_id is provided
+                    if doc_id:
+                        is_valid = False
+                        if doc_id == "doc-1":
+                            is_valid = True
+                        else:
+                            has_contains = any(
+                                e["from"] == doc_id and e["to"] == node_id and e["type"] == "CONTAINS"
+                                for e in self.mock_edges
+                            )
+                            if has_contains or n.get("doc_id") == doc_id:
+                                is_valid = True
+                        if not is_valid:
+                            return []
+
                     name = n.get("name") or n.get("title") or "Unknown"
                     return [{
                         "label": n.get("label", "Concept"),
@@ -360,7 +424,13 @@ class Neo4jClient:
 
             # List all nodes fallback
             if "MATCH (N) RETURN" in query_upper or "MATCH (N:CONCEPT)" in query_upper:
-                return [{"n": node} for node in self.mock_nodes.values()]
+                doc_id = params.get("doc_id") or params.get("document_id")
+                nodes_list = []
+                for node in self.mock_nodes.values():
+                    if doc_id and doc_id != "doc-1" and node.get("doc_id") != doc_id:
+                        continue
+                    nodes_list.append({"n": node})
+                return nodes_list
 
         return []
 

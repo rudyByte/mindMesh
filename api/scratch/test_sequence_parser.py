@@ -1,8 +1,19 @@
+import sys
+import os
 import re
+
+# Set Python path to find the 'api' directory
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from api.utils.llm_client import calculate_entity_quality, normalize_and_clean_concept_name
 
 def is_valid_concept_name(name: str) -> bool:
     name_clean = name.strip()
-    if not name_clean or len(name_clean) < 3 or len(name_clean) > 60:
+    if not name_clean:
+        return False
+    
+    # Check using the central quality function
+    if calculate_entity_quality(name_clean, "Concept") <= 0.7:
         return False
     
     # Check if first word is a common instruction verb
@@ -22,14 +33,7 @@ def is_valid_concept_name(name: str) -> bool:
     return True
 
 def clean_concept_name(name: str) -> str:
-    # Remove markdown formatting like bold/italics
-    name_clean = re.sub(r'[*_`]', '', name).strip().rstrip(',.;:-')
-    if not name_clean:
-        return ""
-    # Capitalize first letter if it is lowercase
-    if name_clean[0].islower():
-        name_clean = name_clean[0].upper() + name_clean[1:]
-    return name_clean
+    return normalize_and_clean_concept_name(name)
 
 def parse_learning_sequences(text: str) -> tuple[list[dict], list[dict]]:
     nodes = []
