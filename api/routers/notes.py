@@ -6,9 +6,9 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from api.utils.neo4j_client import neo4j_client
-from api.utils.llm_client import llm_client
-from api.config import config
+from utils.neo4j_client import neo4j_client
+from utils.llm_client import llm_client
+from config import config
 
 router = APIRouter()
 logger = logging.getLogger("notes_router")

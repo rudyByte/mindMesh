@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from api.utils.neo4j_client import neo4j_client
+from utils.neo4j_client import neo4j_client
 
 router = APIRouter()
 logger = logging.getLogger("citations_router")

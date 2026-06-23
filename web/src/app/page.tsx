@@ -3,11 +3,12 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useStore } from '../store/useStore';
-import { API_BASE_URL } from '../config';
 import { LeftSidebar, RightSidebar, BottomPanel } from '../components/Panels';
 import GraphCanvas from '../components/GraphCanvas';
 import UploadModal from '../components/UploadModal';
 import { ErrorBoundary } from '../components/ErrorBoundary';
+import { ConnectionBanner } from '../components/ConnectionBanner';
+import { API_BASE_URL } from '../lib/api';
 import { FileText, Map as MapIcon, Sparkles } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -135,7 +136,9 @@ export default function DashboardPage() {
   const activeDocTitle = documents.find(d => d.id === activeDocumentId)?.title || 'Document';
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#030c0b]/20 backdrop-blur-sm select-none text-slate-200">
+    <>
+      <ConnectionBanner />
+      <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#030c0b]/20 backdrop-blur-sm select-none text-slate-200">
       {/* 3-Pane workspace layout */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left side controller navigation */}
@@ -240,5 +243,6 @@ export default function DashboardPage() {
       {/* Document ingestion Modal popover */}
       <UploadModal isOpen={isUploadOpen} onClose={() => setIsUploadOpen(false)} />
     </div>
+    </>
   );
 }

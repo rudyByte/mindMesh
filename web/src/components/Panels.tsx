@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useStore, GraphNode } from '../store/useStore';
-import { API_BASE_URL } from '../config';
+import { API_BASE_URL } from '../lib/api';
 import { 
   FileText, Plus, Database, Cpu, HelpCircle, 
   Map as MapIcon, Sparkles, BookOpen, GraduationCap, 
@@ -572,6 +572,7 @@ export function RightSidebar() {
   const setLearningPathNarration = useStore((state) => state.setLearningPathNarration);
   const appendGraphData = useStore((state) => state.appendGraphData);
   const globalNodes = useStore((state) => state.nodes);
+  const activeDocumentId = useStore((state) => state.activeDocumentId);
 
   // Local state
   const [contextCard, setContextCard] = useState<any>(null);

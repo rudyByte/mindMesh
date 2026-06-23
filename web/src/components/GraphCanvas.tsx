@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useStore, GraphNode, GraphEdge } from '../store/useStore';
-import { API_BASE_URL } from '../config';
+import { API_BASE_URL } from '../lib/api';
 import { Layers, Compass, Loader2 } from 'lucide-react';
 import { forceCollide } from 'd3-force';
 

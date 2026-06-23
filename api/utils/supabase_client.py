@@ -1,7 +1,7 @@
 import os
 import logging
 from supabase import create_client, Client
-from api.config import config
+from config import config
 
 logger = logging.getLogger("supabase_client")
 

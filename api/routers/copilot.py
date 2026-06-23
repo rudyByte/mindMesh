@@ -7,9 +7,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from anthropic import AsyncAnthropic
 
-from api.utils.neo4j_client import neo4j_client
-from api.utils.llm_client import llm_client
-from api.config import config
+from utils.neo4j_client import neo4j_client
+from utils.llm_client import llm_client
+from config import config
 
 router = APIRouter()
 logger = logging.getLogger("copilot_router")
