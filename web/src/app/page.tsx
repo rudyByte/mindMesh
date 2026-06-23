@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useStore } from '../store/useStore';
+import { API_BASE_URL } from '../config';
 import { LeftSidebar, RightSidebar, BottomPanel } from '../components/Panels';
 import GraphCanvas from '../components/GraphCanvas';
 import UploadModal from '../components/UploadModal';
@@ -25,6 +26,7 @@ export default function DashboardPage() {
 
   const [selectedText, setSelectedText] = useState('');
   const [popoverCoords, setPopoverCoords] = useState<{ x: number; y: number } | null>(null);
+  const [documentTextError, setDocumentTextError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) {
@@ -40,14 +42,18 @@ export default function DashboardPage() {
     }
 
     const fetchDocumentText = async () => {
+      setDocumentTextError(null);
       try {
-        const response = await fetch(`http://localhost:8000/documents/${activeDocumentId}/text`);
+        const response = await fetch(`${API_BASE_URL}/documents/${activeDocumentId}/text`);
         if (response.ok) {
           const data = await response.json();
           setDocumentText(data.text);
+        } else {
+          setDocumentTextError(`HTTP Error ${response.status}: ${response.statusText}`);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to load document text preview', err);
+        setDocumentTextError(err.message || 'API connection failed');
       }
     };
 
@@ -77,7 +83,7 @@ export default function DashboardPage() {
     if (!selectedText || !activeDocumentId) return;
 
     try {
-      const response = await fetch('http://localhost:8000/highlights', {
+      const response = await fetch(`${API_BASE_URL}/highlights`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -107,7 +113,7 @@ export default function DashboardPage() {
         setPopoverCoords(null);
 
         // Fetch and load updated document graph elements to canvas
-        const graphResponse = await fetch(`http://localhost:8000/documents/${activeDocumentId}/graph`);
+        const graphResponse = await fetch(`${API_BASE_URL}/documents/${activeDocumentId}/graph`);
         if (graphResponse.ok) {
           const graphData = await graphResponse.json();
           useStore.getState().appendGraphData(graphData);
@@ -191,7 +197,11 @@ export default function DashboardPage() {
                     </div>
 
                     <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap font-medium font-sans">
-                      {documentText || "Parsing document content..."}
+                      {documentTextError ? (
+                        <span className="text-rose-400 font-semibold block bg-rose-500/10 p-4 rounded-xl border border-rose-500/20">
+                          Error loading document text: {documentTextError}
+                        </span>
+                      ) : documentText || "Parsing document content..."}
                     </p>
 
                     {/* Selection Highlight Popover Insight Button */}

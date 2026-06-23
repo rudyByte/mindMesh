@@ -3,6 +3,7 @@
 import React, { useState, useRef } from 'react';
 import { Upload, X, FileText, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useStore } from '../store/useStore';
+import { API_BASE_URL } from '../config';
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -70,13 +71,13 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
     formData.append('file', file);
 
     try {
-      const response = await fetch('http://localhost:8000/documents/upload', {
+      const response = await fetch(`${API_BASE_URL}/documents/upload`, {
         method: 'POST',
         body: formData,
       });
 
       if (!response.ok) {
-        throw new Error(`Upload failed: ${response.statusText}`);
+        throw new Error(`Upload failed: HTTP ${response.status} ${response.statusText}`);
       }
 
       const uploadData = await response.json();
@@ -102,9 +103,9 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const pollStatus = (docId: string) => {
     let intervalId = setInterval(async () => {
       try {
-        const response = await fetch(`http://localhost:8000/documents/${docId}/status`);
+        const response = await fetch(`${API_BASE_URL}/documents/${docId}/status`);
         if (!response.ok) {
-          throw new Error('Failed to get status');
+          throw new Error(`Failed to get status (HTTP ${response.status})`);
         }
         
         const data = await response.json();
@@ -133,7 +134,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
           setGraphData({ nodes: [], edges: [] });
           
           // Fetch and load graph
-          const graphResponse = await fetch(`http://localhost:8000/documents/${docId}/graph`);
+          const graphResponse = await fetch(`${API_BASE_URL}/documents/${docId}/graph`);
           if (graphResponse.ok) {
             const graphData = await graphResponse.json();
             
@@ -160,7 +161,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
         }
       } catch (err: any) {
         setUploadState('error');
-        setErrorMsg('Polling status failed.');
+        setErrorMsg(err.message ? `Polling status failed: ${err.message}` : 'Polling status failed.');
         clearInterval(intervalId);
       }
     }, 2000);

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useStore, GraphNode } from '../store/useStore';
+import { API_BASE_URL } from '../config';
 import { 
   FileText, Plus, Database, Cpu, HelpCircle, 
   Map as MapIcon, Sparkles, BookOpen, GraduationCap, 
@@ -49,18 +50,27 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
     supabase: { status: string; mode: string };
     anthropic: { status: string; mode: string };
   } | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
+  const [notesError, setNotesError] = useState<string | null>(null);
+  const [citationsError, setCitationsError] = useState<string | null>(null);
 
   // Fetch health status
   useEffect(() => {
     const fetchHealth = async () => {
       try {
-        const response = await fetch('http://localhost:8000/health/deep');
+        const response = await fetch(`${API_BASE_URL}/health/deep`);
         if (response.ok) {
           const data = await response.json();
           setHealthStatus(data.services);
+          setApiError(null);
+        } else {
+          setApiError(`HTTP Error ${response.status}: ${response.statusText}`);
+          setHealthStatus(null);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to fetch system health status', err);
+        setApiError(err.message || 'API connection failed (server offline)');
+        setHealthStatus(null);
       }
     };
     
@@ -69,18 +79,21 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch notes on load
   // Fetch notes on load and document change
   useEffect(() => {
     const fetchNotes = async () => {
       try {
-        const response = await fetch('http://localhost:8000/notes');
+        const response = await fetch(`${API_BASE_URL}/notes`);
         if (response.ok) {
           const data = await response.json();
           setNotes(data);
+          setNotesError(null);
+        } else {
+          setNotesError(`HTTP Error ${response.status}: ${response.statusText}`);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to load notes', err);
+        setNotesError(err.message || 'API connection failed');
       }
     };
     fetchNotes();
@@ -91,13 +104,17 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
     const fetchCitations = async () => {
       setCitationsLoading(true);
       try {
-        const response = await fetch('http://localhost:8000/citations');
+        const response = await fetch(`${API_BASE_URL}/citations`);
         if (response.ok) {
           const data = await response.json();
           setCitations(data);
+          setCitationsError(null);
+        } else {
+          setCitationsError(`HTTP Error ${response.status}: ${response.statusText}`);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to load citations', err);
+        setCitationsError(err.message || 'API connection failed');
       } finally {
         setCitationsLoading(false);
       }
@@ -108,7 +125,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const handleDocumentSelect = async (docId: string) => {
     setActiveDocumentId(docId);
     try {
-      const response = await fetch(`http://localhost:8000/documents/${docId}/graph`);
+      const response = await fetch(`${API_BASE_URL}/documents/${docId}/graph`);
       if (response.ok) {
         const data = await response.json();
         setGraphData(data);
@@ -123,15 +140,19 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
     setNoteSearch(q);
     try {
       const url = q.trim()
-        ? `http://localhost:8000/notes/search?q=${encodeURIComponent(q)}`
-        : 'http://localhost:8000/notes';
+        ? `${API_BASE_URL}/notes/search?q=${encodeURIComponent(q)}`
+        : `${API_BASE_URL}/notes`;
       const response = await fetch(url);
       if (response.ok) {
         const data = await response.json();
         setNotes(data);
+        setNotesError(null);
+      } else {
+        setNotesError(`HTTP Error ${response.status}: ${response.statusText}`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to search notes', err);
+      setNotesError(err.message || 'API connection failed');
     }
   };
 
@@ -139,7 +160,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
     if (!noteInput.trim()) return;
     setNoteSubmitLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/notes', {
+      const response = await fetch(`${API_BASE_URL}/notes`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -150,14 +171,18 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
         const data = await response.json();
         addNote(data);
         setNoteInput('');
+        setNotesError(null);
         
         // Refresh graph to show newly added Note node & links
         if (activeDocumentId) {
           handleDocumentSelect(activeDocumentId);
         }
+      } else {
+        setNotesError(`HTTP Error ${response.status}: ${response.statusText}`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to save note', err);
+      setNotesError(err.message || 'API connection failed');
     } finally {
       setNoteSubmitLoading(false);
     }
@@ -395,7 +420,12 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
             {/* Scrollable list of Notes */}
             <div className="space-y-2.5 pt-2">
               <div className="text-[9px] text-cyan-500/60 font-mono font-bold tracking-widest uppercase">SAVED NOTES</div>
-              {notes.length === 0 ? (
+              {notesError ? (
+                <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-[10px] text-rose-400 font-semibold leading-normal font-sans">
+                  <p className="font-bold flex items-center gap-1">⚠️ Connection Error</p>
+                  <p className="font-mono text-[9px] mt-0.5 opacity-90">{notesError}</p>
+                </div>
+              ) : notes.length === 0 ? (
                 <div className="text-center py-6 text-[10px] text-slate-500 border border-dashed border-cyan-950 rounded-lg font-medium">
                   No notes saved yet. Write a personal note above to capture insights.
                 </div>
@@ -424,7 +454,12 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
           <div className="p-3 space-y-4">
             <div className="space-y-2.5">
               <div className="text-[9px] text-cyan-500/60 font-mono font-bold tracking-widest uppercase">Saved Citations</div>
-              {citationsLoading ? (
+              {citationsError ? (
+                <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-[10px] text-rose-400 font-semibold leading-normal font-sans">
+                  <p className="font-bold flex items-center gap-1">⚠️ Connection Error</p>
+                  <p className="font-mono text-[9px] mt-0.5 opacity-90">{citationsError}</p>
+                </div>
+              ) : citationsLoading ? (
                 <div className="space-y-2.5">
                   {[1, 2, 3].map((i) => (
                     <div key={i} className="p-3 rounded-lg bg-cyan-950/10 border border-cyan-500/5 space-y-2.5 animate-pulse">
@@ -486,7 +521,12 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
       <div className="p-4 border-t border-cyan-500/10 flex items-center justify-between text-[10px] text-slate-500 font-medium">
         <span className="flex items-center gap-1.5"><HelpCircle className="w-3.5 h-3.5 text-cyan-500/60" /> Docs</span>
         <div className="flex items-center gap-2">
-          {healthStatus ? (
+          {apiError ? (
+            <div className="flex items-center gap-1.5 animate-pulse" title={`API is offline:\n${apiError}`}>
+              <span className="text-[9px] font-bold text-rose-500 mr-0.5 font-mono">API OFFLINE:</span>
+              <span className="w-2 h-2 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.6)]" />
+            </div>
+          ) : healthStatus ? (
             <div className="flex items-center gap-1.5" title={`Neo4j: ${healthStatus.neo4j.status} (${healthStatus.neo4j.mode})\nSupabase: ${healthStatus.supabase.status} (${healthStatus.supabase.mode})\nAI: ${healthStatus.anthropic.status} (${healthStatus.anthropic.mode})`}>
               <span className="text-[9px] font-bold text-slate-600 mr-0.5 font-mono">STATUS:</span>
               <span className={`w-2 h-2 rounded-full cursor-help ${healthStatus.neo4j.status === 'ok' ? 'bg-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.6)]' : 'bg-rose-500 animate-ping'}`} title={`Neo4j (${healthStatus.neo4j.mode})`} />
@@ -528,6 +568,7 @@ export function RightSidebar() {
   // Local state
   const [contextCard, setContextCard] = useState<any>(null);
   const [contextLoading, setContextLoading] = useState(false);
+  const [contextError, setContextError] = useState<string | null>(null);
   const [inputValue, setInputValue] = useState('');
   const [selectedStyle, setSelectedStyle] = useState('APA');
   const [citationSaving, setCitationSaving] = useState(false);
@@ -541,7 +582,7 @@ export function RightSidebar() {
     if (!selectedNode || selectedNode.label !== 'Paper') return;
     setCitationSaving(true);
     try {
-      const response = await fetch('http://localhost:8000/citations', {
+      const response = await fetch(`${API_BASE_URL}/citations`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -566,7 +607,7 @@ export function RightSidebar() {
     if (!selectedNode || selectedNode.label !== 'Concept') return;
     setPathGenerating(true);
     try {
-      const response = await fetch(`http://localhost:8000/learning-path?target=${selectedNode.id}`);
+      const response = await fetch(`${API_BASE_URL}/learning-path?target=${selectedNode.id}`);
       if (response.ok) {
         const data = await response.json();
         appendGraphData({ nodes: data.nodes, edges: data.edges });
@@ -595,7 +636,7 @@ export function RightSidebar() {
     };
     setSelectedNode(clickedNode);
     try {
-      const response = await fetch(`http://localhost:8000/graph/node/${stepNode.id}`);
+      const response = await fetch(`${API_BASE_URL}/graph/node/${stepNode.id}`);
       if (response.ok) {
         const detailsData = await response.json();
         setSelectedNode(detailsData);
@@ -614,13 +655,15 @@ export function RightSidebar() {
   useEffect(() => {
     if (!selectedNode) {
       setContextCard(null);
+      setContextError(null);
       return;
     }
 
     const fetchContext = async () => {
       setContextLoading(true);
+      setContextError(null);
       try {
-        const response = await fetch('http://localhost:8000/copilot/context', {
+        const response = await fetch(`${API_BASE_URL}/copilot/context`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -630,9 +673,12 @@ export function RightSidebar() {
         if (response.ok) {
           const data = await response.json();
           setContextCard(data);
+        } else {
+          setContextError(`HTTP Error ${response.status}: ${response.statusText}`);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to load focus context', err);
+        setContextError(err.message || 'API connection failed');
       } finally {
         setContextLoading(false);
       }
@@ -654,7 +700,7 @@ export function RightSidebar() {
     addChatMessage({ role: 'assistant' as const, content: '' });
 
     try {
-      const response = await fetch('http://localhost:8000/copilot/chat', {
+      const response = await fetch(`${API_BASE_URL}/copilot/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -763,6 +809,15 @@ export function RightSidebar() {
                     <div className="w-20 h-5 bg-slate-800 rounded border border-slate-700/30" />
                   </div>
                 </div>
+              </div>
+            ) : contextError ? (
+              <div className="p-3.5 glass-card rounded-xl border border-rose-500/25 bg-rose-950/10 space-y-2">
+                <h4 className="text-[9px] font-mono font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1">
+                  <MapIcon className="w-3.5 h-3.5" /> Graph Context Error
+                </h4>
+                <p className="text-[10px] text-rose-400 font-mono leading-normal bg-[#0c0303]/30 p-2 rounded border border-rose-500/10">
+                  {contextError}
+                </p>
               </div>
             ) : contextCard ? (
               <div className="p-3.5 glass-card rounded-xl border border-cyan-500/10 bg-cyan-950/10 space-y-3">
@@ -1098,18 +1153,23 @@ export function BottomPanel() {
   const [isExpanded, setIsExpanded] = useState(true);
   const highlights = useStore((state) => state.highlights);
   const setHighlights = useStore((state) => state.setHighlights);
+  const [highlightsError, setHighlightsError] = useState<string | null>(null);
 
   // Fetch highlights on mount
   useEffect(() => {
     const fetchHighlights = async () => {
       try {
-        const response = await fetch('http://localhost:8000/highlights');
+        const response = await fetch(`${API_BASE_URL}/highlights`);
         if (response.ok) {
           const data = await response.json();
           setHighlights(data);
+          setHighlightsError(null);
+        } else {
+          setHighlightsError(`HTTP Error ${response.status}: ${response.statusText}`);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to load highlights', err);
+        setHighlightsError(err.message || 'API connection failed');
       }
     };
     fetchHighlights();
@@ -1133,7 +1193,12 @@ export function BottomPanel() {
       {/* Content drawer */}
       {isExpanded && (
         <div className="h-[92px] p-3 overflow-x-auto flex gap-3 scrollbar-thin">
-          {highlights.length === 0 ? (
+          {highlightsError ? (
+            <div className="min-w-[260px] max-w-[260px] h-full rounded-lg bg-rose-500/10 border border-rose-500/20 p-2.5 flex flex-col justify-center text-[10px] text-rose-400 font-semibold leading-normal font-sans">
+              <p className="font-bold flex items-center gap-1">⚠️ Connection Error</p>
+              <p className="font-mono text-[9px] mt-0.5 opacity-90 truncate">{highlightsError}</p>
+            </div>
+          ) : highlights.length === 0 ? (
             <div className="min-w-[260px] max-w-[260px] h-full rounded-lg border border-dashed border-cyan-950 p-3 flex flex-col justify-center items-center text-center text-[10px] text-slate-500 font-medium font-sans">
               No highlights saved yet. Select document text to save key insights.
             </div>

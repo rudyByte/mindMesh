@@ -9,6 +9,7 @@ from pypdf import PdfReader
 from api.utils.neo4j_client import neo4j_client
 from api.utils.supabase_client import supabase_client
 from api.utils.llm_client import llm_client, calculate_entity_quality, singularize_concept_name
+from api.utils.sequence_parser import parse_learning_sequences
 import re
 
 router = APIRouter()

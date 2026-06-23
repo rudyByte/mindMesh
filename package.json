@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "MindMesh monorepo for Next.js web application and FastAPI backend.",
   "scripts": {
+    "dev": "npx concurrently -n \"web,api\" -c \"cyan,magenta\" \"npm run dev:web\" \"npm run dev:api\"",
     "dev:web": "npm run dev --prefix web",
     "dev:api": "python -m uvicorn main:app --reload --app-dir api",
     "install:web": "npm install --prefix web",

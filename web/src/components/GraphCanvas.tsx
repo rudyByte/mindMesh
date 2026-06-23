@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useStore, GraphNode, GraphEdge } from '../store/useStore';
+import { API_BASE_URL } from '../config';
 import { Layers, Compass, Loader2 } from 'lucide-react';
 import { forceCollide } from 'd3-force';
 
@@ -85,6 +86,7 @@ export default function GraphCanvas() {
   const fgRef = useRef<any>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [loading, setLoading] = useState(false);
+  const [canvasError, setCanvasError] = useState<string | null>(null);
 
   // Store state
   const nodes = useStore((state) => state.nodes);
@@ -129,6 +131,48 @@ export default function GraphCanvas() {
     });
   }, [safeEdges, filteredNodes]);
 
+  const validatedGraphData = React.useMemo(() => {
+    // 1. Validate and clean nodes
+    const validNodes = filteredNodes.filter(n => {
+      if (!n) return false;
+      if (typeof n.id !== 'string' || !n.id.trim()) return false;
+      if (typeof n.label !== 'string' || !n.label.trim()) return false;
+      return true;
+    }).map(n => ({
+      ...n,
+      name: n.name || (n as any).title || 'Unknown Node',
+      description: n.description || '',
+      difficulty_level: n.difficulty_level || 'Beginner',
+      x: typeof (n as any).x === 'number' && !isNaN((n as any).x) ? (n as any).x : undefined,
+      y: typeof (n as any).y === 'number' && !isNaN((n as any).y) ? (n as any).y : undefined,
+    }));
+
+    const validNodeIds = new Set(validNodes.map(n => n.id));
+
+    // 2. Validate and clean edges/links
+    const validLinks = filteredEdges.filter(e => {
+      if (!e) return false;
+      const fromId = typeof e.source === 'object' && e.source !== null ? (e.source as any).id : e.source || e.from;
+      const toId = typeof e.target === 'object' && e.target !== null ? (e.target as any).id : e.target || e.to;
+      
+      if (typeof fromId !== 'string' || !fromId.trim()) return false;
+      if (typeof toId !== 'string' || !toId.trim()) return false;
+      
+      // Ensure both nodes exist in our validNodes list to prevent canvas crash
+      return validNodeIds.has(fromId) && validNodeIds.has(toId);
+    }).map(e => {
+      const fromId = typeof e.source === 'object' && e.source !== null ? (e.source as any).id : e.source || e.from;
+      const toId = typeof e.target === 'object' && e.target !== null ? (e.target as any).id : e.target || e.to;
+      return {
+        source: fromId,
+        target: toId,
+        type: e.type || 'RELATED_TO'
+      };
+    });
+
+    return { nodes: validNodes, links: validLinks };
+  }, [filteredNodes, filteredEdges]);
+
   // Set zoom to fit flag when nodes are loaded or active document changes
   useEffect(() => {
     if (safeNodes.length > 0) {
@@ -140,16 +184,27 @@ export default function GraphCanvas() {
   useEffect(() => {
     if (!selectedNode || !fgRef.current) return;
     
-    // Find the node coordinates in the graph simulation
-    const fg = fgRef.current;
-    const graphNodes = fg.graphData().nodes;
-    const node = graphNodes.find((n: any) => n.id === selectedNode.id);
-    
-    if (node) {
-      const x = typeof node.x === 'number' && !isNaN(node.x) ? node.x : 0;
-      const y = typeof node.y === 'number' && !isNaN(node.y) ? node.y : 0;
-      fg.centerAt(x, y, 800);
-      fg.zoom(2.5, 800);
+    try {
+      const fg = fgRef.current;
+      if (typeof fg.graphData !== 'function') return;
+      
+      const graphData = fg.graphData();
+      if (!graphData || !Array.isArray(graphData.nodes)) return;
+      
+      const node = graphData.nodes.find((n: any) => n && n.id === selectedNode.id);
+      
+      if (node) {
+        const x = typeof node.x === 'number' && !isNaN(node.x) ? node.x : 0;
+        const y = typeof node.y === 'number' && !isNaN(node.y) ? node.y : 0;
+        if (typeof fg.centerAt === 'function') {
+          fg.centerAt(x, y, 800);
+        }
+        if (typeof fg.zoom === 'function') {
+          fg.zoom(2.5, 800);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to focus/zoom camera to selected node:', err);
     }
   }, [selectedNode]);
 
@@ -173,15 +228,19 @@ export default function GraphCanvas() {
   useEffect(() => {
     const fetchInitialGraph = async () => {
       setLoading(true);
+      setCanvasError(null);
       try {
         // Query list of all nodes to display a default set if no document is uploaded
-        const response = await fetch('http://localhost:8000/documents/doc-1/graph');
+        const response = await fetch(`${API_BASE_URL}/documents/doc-1/graph`);
         if (response.ok) {
           const data = await response.json();
           setGraphData(data);
+        } else {
+          setCanvasError(`HTTP Error ${response.status}: ${response.statusText}`);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to load initial graph', err);
+        setCanvasError(err.message || 'API connection failed');
       } finally {
         setLoading(false);
       }
@@ -196,18 +255,17 @@ export default function GraphCanvas() {
   // Compute degree for each node (number of connections)
   const nodeDegrees = React.useMemo(() => {
     const degrees: Record<string, number> = {};
-    filteredNodes.forEach(n => {
-      if (n && n.id) degrees[n.id] = 0;
+    validatedGraphData.nodes.forEach(n => {
+      degrees[n.id] = 0;
     });
-    filteredEdges.forEach(e => {
-      if (!e) return;
-      const fromId = typeof e.source === 'object' && e.source !== null ? (e.source as any).id : e.source || e.from;
-      const toId = typeof e.target === 'object' && e.target !== null ? (e.target as any).id : e.target || e.to;
-      if (fromId && degrees[fromId] !== undefined) degrees[fromId]++;
-      if (toId && degrees[toId] !== undefined) degrees[toId]++;
+    validatedGraphData.links.forEach(e => {
+      const fromId = e.source;
+      const toId = e.target;
+      if (degrees[fromId] !== undefined) degrees[fromId]++;
+      if (degrees[toId] !== undefined) degrees[toId]++;
     });
     return degrees;
-  }, [filteredNodes, filteredEdges]);
+  }, [validatedGraphData]);
 
   // Configure forces inside the force-directed simulation safely
   useEffect(() => {
@@ -292,25 +350,31 @@ export default function GraphCanvas() {
     };
     setSelectedNode(clickedNode);
     setLoading(true);
+    setCanvasError(null);
 
     try {
       // Fetch full details of the clicked node
-      const detailsUrl = `http://localhost:8000/graph/node/${node.id}`;
+      const detailsUrl = `${API_BASE_URL}/graph/node/${node.id}`;
       const detailsRes = await fetch(detailsUrl);
       if (detailsRes.ok) {
         const detailsData = await detailsRes.json();
         setSelectedNode(detailsData);
+      } else {
+        setCanvasError(`Failed to load node details (HTTP ${detailsRes.status})`);
       }
 
       // Fetch dynamic node expansion
-      const url = `http://localhost:8000/graph/expand?node_id=${node.id}&depth=${graphDepth}&mode=${graphMode}`;
+      const url = `${API_BASE_URL}/graph/expand?node_id=${node.id}&depth=${graphDepth}&mode=${graphMode}`;
       const response = await fetch(url);
       if (response.ok) {
         const expandedData = await response.json();
         appendGraphData(expandedData);
+      } else {
+        setCanvasError(`Failed to expand node (HTTP ${response.status})`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to expand/retrieve node details', err);
+      setCanvasError(err.message || 'API connection failed during expansion');
     } finally {
       setLoading(false);
     }
@@ -385,10 +449,48 @@ export default function GraphCanvas() {
         </div>
       )}
 
-      {safeNodes.length === 0 ? (
+      {canvasError ? (
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-rose-500/60 gap-3.5 p-6 text-center z-30 bg-[#030c0b]/80 backdrop-blur-sm">
+          <Layers className="w-12 h-12 text-rose-500/40 animate-pulse" />
+          <h3 className="text-sm font-bold text-rose-400">Failed to Load Concept Map</h3>
+          <p className="text-xs max-w-md text-slate-400 font-mono">
+            {canvasError}
+          </p>
+          <button 
+            onClick={async () => {
+              setCanvasError(null);
+              setLoading(true);
+              try {
+                const response = await fetch(`${API_BASE_URL}/documents/${activeDocumentId || 'doc-1'}/graph`);
+                if (response.ok) {
+                  const data = await response.json();
+                  setGraphData(data);
+                } else {
+                  setCanvasError(`HTTP Error ${response.status}: ${response.statusText}`);
+                }
+              } catch (err: any) {
+                setCanvasError(err.message || 'API connection failed');
+              } finally {
+                setLoading(false);
+              }
+            }}
+            className="mt-2 px-4 py-2 text-xs font-semibold rounded-lg bg-rose-950/40 border border-rose-500/30 text-rose-400 hover:bg-rose-950/80 transition-all cursor-pointer shadow-[0_0_10px_rgba(244,63,94,0.15)]"
+          >
+            Retry Connection
+          </button>
+        </div>
+      ) : safeNodes.length === 0 ? (
         <div className="w-full h-full flex flex-col items-center justify-center text-cyan-500/40 gap-2.5">
           <Layers className="w-12 h-12 text-cyan-500/30 animate-pulse" />
           <p className="text-sm font-medium">Upload a PDF document to visualize the concept map</p>
+        </div>
+      ) : validatedGraphData.nodes.length === 0 ? (
+        <div className="w-full h-full flex flex-col items-center justify-center text-cyan-500/40 gap-2.5 p-6 text-center">
+          <Layers className="w-12 h-12 text-cyan-500/30 animate-pulse" />
+          <p className="text-sm font-medium">No {graphFilter || 'nodes'} found in this document</p>
+          <p className="text-[10px] text-slate-500 mt-1 max-w-[240px] leading-relaxed">
+            Try choosing a different section or ingest a document with more metadata.
+          </p>
         </div>
       ) : (
         <GraphErrorBoundary>
@@ -397,16 +499,8 @@ export default function GraphCanvas() {
             width={graphWidth}
             height={graphHeight}
             graphData={{
-              nodes: filteredNodes.filter(n => n && n.id).map(n => ({ ...n })),
-              links: filteredEdges.filter(e => e && (e.source || e.from || (typeof e.source === 'object' && e.source !== null && (e.source as any).id)) && (e.target || e.to || (typeof e.target === 'object' && e.target !== null && (e.target as any).id))).map(e => {
-                const sourceId = typeof e.source === 'object' && e.source !== null ? (e.source as any).id : e.source || e.from;
-                const targetId = typeof e.target === 'object' && e.target !== null ? (e.target as any).id : e.target || e.to;
-                return {
-                  source: sourceId,
-                  target: targetId,
-                  type: e.type || 'RELATED_TO'
-                };
-              })
+              nodes: validatedGraphData.nodes.map(n => ({ ...n })),
+              links: validatedGraphData.links.map(l => ({ ...l }))
             }}
             nodeId="id"
             nodeVal={(node: any) => {
@@ -501,6 +595,8 @@ export default function GraphCanvas() {
                 const isPathNode = activePathNodeIds && activePathNodeIds.includes(node.id);
                 const color = getNodeColor(node.label);
 
+                const scale = typeof globalScale === 'number' && !isNaN(globalScale) && globalScale > 0 ? globalScale : 1;
+
                 // Tech ring/dashboard effect for Selected or Topic nodes
                 if (isSelected || node.label === 'Topic') {
                   ctx.save();
@@ -508,7 +604,7 @@ export default function GraphCanvas() {
                   ctx.beginPath();
                   ctx.arc(x, y, ringRadius, 0, 2 * Math.PI, false);
                   ctx.strokeStyle = node.label === 'Topic' ? 'rgba(245, 158, 11, 0.45)' : 'rgba(6, 182, 212, 0.45)';
-                  ctx.lineWidth = 1 / globalScale;
+                  ctx.lineWidth = 1 / scale;
                   ctx.setLineDash([4, 4]);
                   
                   // Rotate ring slowly over time
@@ -522,7 +618,7 @@ export default function GraphCanvas() {
                   // Tech crosshairs/ticks
                   ctx.save();
                   ctx.strokeStyle = node.label === 'Topic' ? 'rgba(245, 158, 11, 0.6)' : 'rgba(6, 182, 212, 0.6)';
-                  ctx.lineWidth = 0.75 / globalScale;
+                  ctx.lineWidth = 0.75 / scale;
                   const tickLength = 3;
                   for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 2) {
                     const cos = Math.cos(angle);
@@ -552,7 +648,7 @@ export default function GraphCanvas() {
                       gradRay.addColorStop(0, 'rgba(245, 158, 11, 0.7)');
                       gradRay.addColorStop(1, 'rgba(245, 158, 11, 0)');
                       ctx.strokeStyle = gradRay;
-                      ctx.lineWidth = 1.5 / globalScale;
+                      ctx.lineWidth = 1.5 / scale;
                       ctx.beginPath();
                       ctx.moveTo(x + Math.cos(angle) * innerR, y + Math.sin(angle) * innerR);
                       ctx.lineTo(x + Math.cos(angle) * outerR * pulse, y + Math.sin(angle) * outerR * pulse);
@@ -570,7 +666,7 @@ export default function GraphCanvas() {
                   ctx.fillStyle = `rgba(16, 185, 129, ${0.1 + pulseFactor * 0.15})`;
                   ctx.fill();
                   ctx.strokeStyle = 'rgba(16, 185, 129, 0.35)';
-                  ctx.lineWidth = 1 / globalScale;
+                  ctx.lineWidth = 1 / scale;
                   ctx.stroke();
                   ctx.restore();
                 }
@@ -602,7 +698,7 @@ export default function GraphCanvas() {
                 
                 // Rim highlight
                 ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-                ctx.lineWidth = 0.5 / globalScale;
+                ctx.lineWidth = 0.5 / scale;
                 ctx.stroke();
                 ctx.restore();
 
