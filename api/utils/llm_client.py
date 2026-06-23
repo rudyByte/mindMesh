@@ -308,7 +308,11 @@ class LLMClient:
                 {"label": "Author", "name": "Ashish Vaswani", "description": "Lead author of Attention Is All You Need and researcher at Google Brain."},
                 {"label": "Author", "name": "Noam Shazeer", "description": "Co-author of Attention Is All You Need, known for key contributions to Transformer training scalability."},
                 {"label": "Author", "name": "Niki Parmar", "description": "Co-author of Attention Is All You Need and AI researcher at Google Brain."},
-                {"label": "Author", "name": "Jakob Uszkoreit", "description": "Co-author of Attention Is All You Need, senior software engineer and AI researcher."}
+                {"label": "Author", "name": "Jakob Uszkoreit", "description": "Co-author of Attention Is All You Need, senior software engineer and AI researcher."},
+                # Keywords
+                {"label": "Keyword", "name": "Deep Learning", "description": "A subset of machine learning based on artificial neural networks with representation learning."},
+                {"label": "Keyword", "name": "Natural Language Processing", "description": "Interactions between computers and human languages, focusing on processing and analyzing large natural language data."},
+                {"label": "Keyword", "name": "Optimization Algorithms", "description": "Methods used to minimize loss functions and train neural network models."}
             ]
             relationships = [
                 {"from": "Transformer Architecture", "to": "Encoder Stack", "type": "USES_METHOD"},
@@ -342,7 +346,11 @@ class LLMClient:
                 {"from": "Attention Is All You Need", "to": "Niki Parmar", "type": "AUTHORED_BY"},
                 {"from": "Attention Is All You Need", "to": "Jakob Uszkoreit", "type": "AUTHORED_BY"},
                 {"from": "Attention Is All You Need", "to": "Transformer Architecture", "type": "USES_METHOD"},
-                {"from": "Attention Is All You Need", "to": "Self-Attention", "type": "USES_METHOD"}
+                {"from": "Attention Is All You Need", "to": "Self-Attention", "type": "USES_METHOD"},
+                # Keyword links
+                {"from": "Attention Is All You Need", "to": "Deep Learning", "type": "HAS_KEYWORD"},
+                {"from": "Attention Is All You Need", "to": "Natural Language Processing", "type": "HAS_KEYWORD"},
+                {"from": "Attention Is All You Need", "to": "Optimization Algorithms", "type": "HAS_KEYWORD"}
             ]
             return {"nodes": nodes, "relationships": relationships}
 
@@ -442,6 +450,8 @@ class LLMClient:
                         label = "Institution"
                     elif normalized_name.startswith("Chapter") or normalized_name.startswith("Section"):
                         label = "Topic"
+                    elif len(normalized_name.split()) == 1 and len(normalized_name) > 3:
+                        label = "Keyword"
                     
                     # Try to extract a definition from the sentence
                     description = ""
@@ -488,6 +498,16 @@ class LLMClient:
                         c1 = present_concepts[i]
                         c2 = present_concepts[j]
                         
+                        c1_node = concepts_map[c1.lower()]
+                        c2_node = concepts_map[c2.lower()]
+                        
+                        if c1_node["label"] == "Keyword" or c2_node["label"] == "Keyword":
+                            if c2_node["label"] == "Keyword":
+                                relationships.append({"from": c1, "to": c2, "type": "HAS_KEYWORD"})
+                            else:
+                                relationships.append({"from": c2, "to": c1, "type": "HAS_KEYWORD"})
+                            continue
+                        
                         c1_pos = sent_low.find(c1.lower())
                         c2_pos = sent_low.find(c2.lower())
                         
@@ -526,13 +546,23 @@ class LLMClient:
             for i in range(1, len(sorted_concepts)):
                 c1 = sorted_concepts[i]["name"]
                 c2 = sorted_concepts[0]["name"]  # Connect back to the first concept (hub)
+                
+                c1_node = concepts_map[c1.lower()]
+                c2_node = concepts_map[c2.lower()]
+                
                 # Avoid duplicate relationship entries
                 if not any((r["from"].lower() == c2.lower() and r["to"].lower() == c1.lower()) or (r["from"].lower() == c1.lower() and r["to"].lower() == c2.lower()) for r in relationships):
-                    relationships.append({
-                        "from": c2,
-                        "to": c1,
-                        "type": "RELATED_TO"
-                    })
+                    if c1_node["label"] == "Keyword" or c2_node["label"] == "Keyword":
+                        if c2_node["label"] == "Keyword":
+                            relationships.append({"from": c1, "to": c2, "type": "HAS_KEYWORD"})
+                        else:
+                            relationships.append({"from": c2, "to": c1, "type": "HAS_KEYWORD"})
+                    else:
+                        relationships.append({
+                            "from": c2,
+                            "to": c1,
+                            "type": "RELATED_TO"
+                        })
                             
         return {"nodes": nodes, "relationships": relationships}
 

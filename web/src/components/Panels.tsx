@@ -23,6 +23,9 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const user = useStore((state) => state.user);
   const graphFilter = useStore((state) => state.graphFilter);
   const setGraphFilter = useStore((state) => state.setGraphFilter);
+  const nodes = useStore((state) => state.nodes);
+  const selectedNode = useStore((state) => state.selectedNode);
+  const setSelectedNode = useStore((state) => state.setSelectedNode);
 
   // Notes state (Sprint 4)
   const notes = useStore((state) => state.notes);
@@ -282,8 +285,33 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
                 }`}
               >
                 <Tag className="w-4 h-4" />
-                Keywords
+                Keywords ({nodes.filter(n => n.label === 'Keyword').length})
               </a>
+              {graphFilter === 'Keyword' && (
+                <div className="pl-6 pr-2 py-2 space-y-1.5 max-h-48 overflow-y-auto scrollbar-thin bg-cyan-950/5 rounded-lg border border-cyan-500/5 mt-1 animate-fadeIn">
+                  {nodes.filter(n => n.label === 'Keyword').length === 0 ? (
+                    <div className="text-[10px] text-slate-500 italic p-1.5">No keywords extracted yet.</div>
+                  ) : (
+                    nodes.filter(n => n.label === 'Keyword').map((kw) => {
+                      const isSelected = selectedNode?.id === kw.id;
+                      return (
+                        <button
+                          key={kw.id}
+                          onClick={() => setSelectedNode(kw)}
+                          className={`w-full text-left px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all duration-150 flex items-center gap-1.5 cursor-pointer border ${
+                            isSelected
+                              ? 'bg-cyan-950/50 text-cyan-300 border-cyan-500/30 shadow-[0_0_12px_rgba(20,184,166,0.15)] font-extrabold'
+                              : 'bg-transparent text-slate-400 hover:text-cyan-300 border-transparent hover:bg-cyan-950/20 hover:border-cyan-500/10'
+                          }`}
+                        >
+                          <span className={isSelected ? "text-cyan-400 font-mono" : "text-slate-600 font-mono"}>#</span>
+                          <span className="truncate">{kw.name}</span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
               <a 
                 href="#"
                 onClick={(e) => { e.preventDefault(); setGraphFilter(graphFilter === 'Learning Path' ? null : 'Learning Path'); }}
@@ -684,6 +712,7 @@ export function RightSidebar() {
       case 'Paper': return 'text-purple-400 bg-purple-500/10 border-purple-500/20';
       case 'Author': return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
       case 'Topic': return 'text-amber-400 bg-amber-500/10 border-amber-500/20';
+      case 'Keyword': return 'text-teal-400 bg-teal-500/10 border-teal-500/20';
       default: return 'text-slate-400 bg-slate-500/10 border-slate-500/20';
     }
   };

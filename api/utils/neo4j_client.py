@@ -131,7 +131,10 @@ class Neo4jClient:
             "a-thomas-kipf": {"id": "a-thomas-kipf", "label": "Author", "name": "Thomas Kipf"},
             "a-diederik-kingma": {"id": "a-diederik-kingma", "label": "Author", "name": "Diederik P. Kingma"},
             "a-ian-goodfellow": {"id": "a-ian-goodfellow", "label": "Author", "name": "Ian Goodfellow"},
-            "inst-google": {"id": "inst-google", "label": "Institution", "name": "Google Research", "country": "United States"}
+            "inst-google": {"id": "inst-google", "label": "Institution", "name": "Google Research", "country": "United States"},
+            "k-deep-learning": {"id": "k-deep-learning", "label": "Keyword", "name": "Deep Learning", "description": "A subset of machine learning based on artificial neural networks with representation learning.", "difficulty_level": "Beginner"},
+            "k-nlp": {"id": "k-nlp", "label": "Keyword", "name": "Natural Language Processing", "description": "Interactions between computers and human languages, focusing on processing and analyzing large natural language data.", "difficulty_level": "Beginner"},
+            "k-optimization": {"id": "k-optimization", "label": "Keyword", "name": "Optimization Algorithms", "description": "Methods used to minimize loss functions and train neural network models.", "difficulty_level": "Beginner"}
         }
         self.mock_edges = [
             # Prerequisite links
@@ -183,7 +186,11 @@ class Neo4jClient:
             {"from": "p-adam", "to": "a-diederik-kingma", "type": "AUTHORED_BY"},
             {"from": "p-gan", "to": "a-ian-goodfellow", "type": "AUTHORED_BY"},
             # Affiliation
-            {"from": "a-ashish-vaswani", "to": "inst-google", "type": "AFFILIATED_WITH"}
+            {"from": "a-ashish-vaswani", "to": "inst-google", "type": "AFFILIATED_WITH"},
+            # Keywords
+            {"from": "p-attention", "to": "k-deep-learning", "type": "HAS_KEYWORD"},
+            {"from": "p-attention", "to": "k-nlp", "type": "HAS_KEYWORD"},
+            {"from": "c-gradient-descent", "to": "k-optimization", "type": "HAS_KEYWORD"}
         ]
         # Dynamically set doc_id and create CONTAINS edges for doc-1
         for nid, node in list(self.mock_nodes.items()):
@@ -245,6 +252,12 @@ class Neo4jClient:
                 label = "Highlight"
             elif ":CITATION" in query_upper:
                 label = "Citation"
+            elif ":KEYWORD" in query_upper:
+                label = "Keyword"
+            elif ":TOPIC" in query_upper:
+                label = "Topic"
+            elif ":INSTITUTION" in query_upper:
+                label = "Institution"
             
             name = params.get("name") or params.get("title") or "Node"
             node_id = params.get("id") or f"mock-n-{len(self.mock_nodes) + 1}"
