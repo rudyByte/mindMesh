@@ -3,10 +3,11 @@ import os
 import asyncio
 import io
 
-# Setup import path for project root
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+# Setup import path for project root and api
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))) # api folder
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))) # project root
 
-async def test_pipeline_on_pdf(pdf_path: str, expect_success: bool):
+async def run_pipeline_on_pdf(pdf_path: str, expect_success: bool):
     print(f"\n--- Testing PDF: {os.path.basename(pdf_path)} (Expect Success: {expect_success}) ---")
     
     from fastapi import UploadFile, BackgroundTasks
@@ -69,8 +70,8 @@ async def main():
         print(f"Error: {noisy_pdf} not found. Please create assets first.")
         return
         
-    await test_pipeline_on_pdf(ml_pdf, expect_success=True)
-    await test_pipeline_on_pdf(noisy_pdf, expect_success=False)
+    await run_pipeline_on_pdf(ml_pdf, expect_success=True)
+    await run_pipeline_on_pdf(noisy_pdf, expect_success=False)
     
     print("\n=== MULTIPLE PDF PIPELINE VALIDATION TEST PASSED! ===")
 

@@ -1,8 +1,9 @@
 import sys
 import os
 
-# Set Python path to find the 'api' directory
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+# Set Python path to find the 'api' directory and project root
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # api folder
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))) # project root
 
 from api.routers.documents import are_semantically_similar, cluster_and_merge_nodes
 

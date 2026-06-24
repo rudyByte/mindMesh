@@ -194,7 +194,7 @@ class Neo4jClient:
         ]
         # Dynamically set doc_id and create CONTAINS edges for doc-1
         for nid, node in list(self.mock_nodes.items()):
-            node["session_id"] = "session-1"
+            node["session_id"] = None
             if nid != "doc-1":
                 node["doc_id"] = "doc-1"
                 self.mock_edges.append({
@@ -352,6 +352,13 @@ class Neo4jClient:
                         continue
                     if mode == "basic" and edge["type"] != "PREREQUISITE_OF":
                         continue
+                    if session_id:
+                        if edge.get("session_id") != session_id:
+                            continue
+                    elif doc_id and doc_id != "doc-1":
+                        if edge.get("doc_id") != doc_id:
+                            continue
+                            
                     if edge["from"] in doc_node_ids and edge["to"] in doc_node_ids:
                         if edge["from"] == target_id or edge["to"] == target_id:
                             from_node = self.mock_nodes.get(edge["from"])
@@ -387,10 +394,16 @@ class Neo4jClient:
                             n_copy["name"] = n_copy["title"]
                         doc_nodes.append(n_copy)
                 
-                doc_edges = [
-                    e for e in self.mock_edges 
-                    if e["type"] != "CONTAINS" and e["from"] in doc_node_ids and e["to"] in doc_node_ids
-                ]
+                if doc_id == "doc-1":
+                    doc_edges = [
+                        e for e in self.mock_edges 
+                        if e["type"] != "CONTAINS" and e["from"] in doc_node_ids and e["to"] in doc_node_ids
+                    ]
+                else:
+                    doc_edges = [
+                        e for e in self.mock_edges 
+                        if e["type"] != "CONTAINS" and e.get("doc_id") == doc_id
+                    ]
                 return [{"nodes": doc_nodes, "edges": doc_edges}]
             
             # Fetch single node details by ID

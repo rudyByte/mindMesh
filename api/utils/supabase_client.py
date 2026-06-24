@@ -87,5 +87,25 @@ class SupabaseClientWrapper:
         except Exception as e:
             logger.error(f"Failed to clear Supabase bucket '{bucket}': {e}")
 
+    def delete_file(self, bucket: str, path: str):
+        if self._is_mock:
+            root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            mock_dir = os.path.join(root_dir, "mock_storage", bucket)
+            local_path = os.path.join(mock_dir, os.path.basename(path))
+            if os.path.exists(local_path):
+                try:
+                    os.unlink(local_path)
+                    logger.info(f"[MOCK] Deleted file from local storage: {local_path}")
+                except Exception as e:
+                    logger.error(f"Failed to delete mock file {local_path}: {e}")
+            return
+            
+        try:
+            self._client.storage.from_(bucket).remove([path])
+            logger.info(f"Successfully deleted file '{path}' from Supabase bucket '{bucket}'")
+        except Exception as e:
+            logger.error(f"Failed to delete file '{path}' from Supabase: {e}")
+
 supabase_client = SupabaseClientWrapper()
+
 

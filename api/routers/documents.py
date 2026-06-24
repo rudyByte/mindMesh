@@ -11,6 +11,7 @@ from utils.neo4j_client import neo4j_client
 from utils.supabase_client import supabase_client
 from utils.llm_client import llm_client, calculate_entity_quality, singularize_concept_name, normalize_and_clean_concept_name
 from utils.sequence_parser import parse_learning_sequences
+from utils.text_cleaner import clean_pdf_text_from_bytes
 import re
 
 router = APIRouter()
@@ -226,13 +227,9 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
     extraction_status_cache[doc_id] = {"status": "processing", "progress_pct": 10, "error": None}
     
     try:
-        # 1. Parse PDF text
-        reader = PdfReader(io.BytesIO(file_bytes))
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() or ""
+        # 1. Parse and clean PDF text
+        text, _ = clean_pdf_text_from_bytes(file_bytes)
         
-        text = text.strip()
         if not text:
             raise ValueError("This looks like a scanned PDF — text extraction isn't supported yet.")
             
@@ -375,7 +372,13 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         
         # Verify that every graph node exists in the current document text
         original_count = len(canonical_nodes)
-        canonical_nodes = [n for n in canonical_nodes if n.get("name", "").lower().strip() in text.lower()]
+        
+        def is_concept_in_text(concept_name: str, text_content: str) -> bool:
+            norm_name = re.sub(r'[^a-z0-9]', '', concept_name.lower())
+            norm_text = re.sub(r'[^a-z0-9]', '', text_content.lower())
+            return norm_name in norm_text
+            
+        canonical_nodes = [n for n in canonical_nodes if is_concept_in_text(n.get("name", ""), text)]
         logger.info(f"Filtered out {original_count - len(canonical_nodes)} nodes not present in the document text.")
         
         # Enrich descriptions using document text context
@@ -713,13 +716,15 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 MATCH (a {{name: $from_name, session_id: $session_id}})
                 MATCH (b {{name: $to_name, session_id: $session_id}})
                 MERGE (a)-[r:{rel_type}]->(b)
+                SET r.session_id = $session_id, r.doc_id = $doc_id
                 """
-                neo4j_client.run_query(query, {"from_name": from_name, "to_name": to_name, "session_id": session_id})
+                neo4j_client.run_query(query, {"from_name": from_name, "to_name": to_name, "session_id": session_id, "doc_id": doc_id})
             else:
                 query = f"""
                 MATCH (a {{name: $from_name, doc_id: $doc_id}})
                 MATCH (b {{name: $to_name, doc_id: $doc_id}})
                 MERGE (a)-[r:{rel_type}]->(b)
+                SET r.doc_id = $doc_id
                 """
                 neo4j_client.run_query(query, {"from_name": from_name, "to_name": to_name, "doc_id": doc_id})
             
@@ -739,7 +744,9 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                     neo4j_client.mock_edges.append({
                         "from": from_id,
                         "to": to_id,
-                        "type": rel_type
+                        "type": rel_type,
+                        "doc_id": doc_id,
+                        "session_id": session_id
                     })
                     
         # Update status to done
@@ -904,10 +911,9 @@ def get_document_graph(id: str):
                     n_copy["name"] = n_copy["title"]
                 doc_nodes.append(n_copy)
                 
-        doc_node_ids_filtered = {n["id"] for n in doc_nodes}
         doc_edges = [
             e for e in neo4j_client.mock_edges 
-            if e["type"] != "CONTAINS" and e["from"] in doc_node_ids_filtered and e["to"] in doc_node_ids_filtered
+            if e["type"] != "CONTAINS" and e.get("doc_id") == id
         ]
         return {"nodes": doc_nodes, "edges": doc_edges}
         
@@ -923,6 +929,7 @@ def get_document_graph(id: str):
     MATCH (d:Document {id: $doc_id})-[:CONTAINS]->(n)
     MATCH (d)-[:CONTAINS]->(m)
     MATCH (n)-[r]->(m)
+    WHERE r.doc_id = $doc_id
     RETURN n.id as from_id, m.id as to_id, type(r) as type
     """
     edges_res = neo4j_client.run_query(edges_query, {"doc_id": id})
@@ -973,26 +980,10 @@ def get_session_graph(session_id: str):
                     n_copy["name"] = n_copy["title"]
                 session_nodes.append(n_copy)
                 session_node_ids.add(nid)
-                
-        if not session_nodes and (session_id == "session-1" or session_id == "default"):
-            # Fallback to pre-seeded mock data for default session
-            ml_nodes = []
-            for n in neo4j_client.mock_nodes.values():
-                if n.get("label") not in ["Document", "Note", "Highlight", "Citation"]:
-                    n_copy = dict(n)
-                    if not n_copy.get("name") and n_copy.get("title"):
-                        n_copy["name"] = n_copy["title"]
-                    ml_nodes.append(n_copy)
-            ml_node_ids = {n["id"] for n in ml_nodes}
-            ml_edges = [
-                e for e in neo4j_client.mock_edges 
-                if e["type"] != "CONTAINS" and e["from"] in ml_node_ids and e["to"] in ml_node_ids
-            ]
-            return {"nodes": ml_nodes, "edges": ml_edges}
             
         session_edges = [
             e for e in neo4j_client.mock_edges 
-            if e["type"] != "CONTAINS" and e["from"] in session_node_ids and e["to"] in session_node_ids
+            if e["type"] != "CONTAINS" and e.get("session_id") == session_id
         ]
         return {"nodes": session_nodes, "edges": session_edges}
 
@@ -1008,6 +999,7 @@ def get_session_graph(session_id: str):
     MATCH (n) WHERE n.session_id = $session_id AND NOT n:Document AND NOT n:Note AND NOT n:Highlight AND NOT n:Citation
     MATCH (m) WHERE m.session_id = $session_id AND NOT m:Document AND NOT m:Note AND NOT m:Highlight AND NOT m:Citation
     MATCH (n)-[r]->(m)
+    WHERE r.session_id = $session_id
     RETURN n.id as from_id, m.id as to_id, type(r) as type
     """
     edges_res = neo4j_client.run_query(edges_query, {"session_id": session_id})
@@ -1053,11 +1045,57 @@ def get_document_text(id: str):
         path = f"uploads/{id}_{title}"
         file_bytes = supabase_client.download_file("documents", path)
         
-        reader = PdfReader(io.BytesIO(file_bytes))
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() or ""
+        from utils.text_cleaner import clean_pdf_text_from_bytes
+        text, _ = clean_pdf_text_from_bytes(file_bytes)
         return {"text": text}
     except Exception as e:
         logger.error(f"Failed to fetch or parse PDF bytes for document {id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch or parse document text: {str(e)}")
+
+@router.delete("/sessions/{session_id}")
+def delete_session_data(session_id: str):
+    import os
+    # 1. Fetch document nodes in this session to get their paths for deletion from Supabase
+    if neo4j_client.is_mock():
+        doc_nodes = [
+            n for n in neo4j_client.mock_nodes.values() 
+            if n.get("session_id") == session_id and n.get("label") == "Document"
+        ]
+    else:
+        query = "MATCH (d:Document {session_id: $session_id}) RETURN d.storage_url as url"
+        res = neo4j_client.run_query(query, {"session_id": session_id})
+        doc_nodes = [{"storage_url": r["url"]} for r in res]
+
+    # Delete files from Supabase/mock storage
+    for doc in doc_nodes:
+        url = doc.get("storage_url", "")
+        if url:
+            if url.startswith("file:///"):
+                filename = os.path.basename(url)
+                supabase_client.delete_file("documents", filename)
+            else:
+                match = re.search(r'documents/(uploads/.*)', url)
+                if match:
+                    path = match.group(1)
+                    supabase_client.delete_file("documents", path)
+
+    # 2. Delete nodes/edges from Neo4j / mock
+    if neo4j_client.is_mock():
+        deleted_ids = set()
+        for nid, n in list(neo4j_client.mock_nodes.items()):
+            if n.get("session_id") == session_id:
+                deleted_ids.add(nid)
+                neo4j_client.mock_nodes.pop(nid)
+        
+        neo4j_client.mock_edges = [
+            e for e in neo4j_client.mock_edges
+            if e["from"] not in deleted_ids and e["to"] not in deleted_ids
+        ]
+    else:
+        neo4j_client.run_query(
+            "MATCH (n) WHERE n.session_id = $session_id DETACH DELETE n",
+            {"session_id": session_id}
+        )
+
+    return {"status": "success", "message": f"Deleted session {session_id} data successfully."}
+

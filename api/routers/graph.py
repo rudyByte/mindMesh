@@ -139,13 +139,13 @@ def expand_graph(
         if mode == "basic":
             cypher = """
             MATCH p=(target {id: $id, session_id: $session_id})<-[:PREREQUISITE_OF*1..$depth]-(n)
-            WHERE ALL(x IN nodes(p) WHERE x.session_id = $session_id)
+            WHERE ALL(x IN nodes(p) WHERE x.session_id = $session_id) AND ALL(r IN relationships(p) WHERE r.session_id = $session_id)
             RETURN p
             """
         else:
             cypher = """
             MATCH p=(target {id: $id, session_id: $session_id})-[:EXTENDS|RELATED_TO*1..$depth]-(n)
-            WHERE ALL(x IN nodes(p) WHERE x.session_id = $session_id)
+            WHERE ALL(x IN nodes(p) WHERE x.session_id = $session_id) AND ALL(r IN relationships(p) WHERE r.session_id = $session_id)
             RETURN p
             """
     else:
@@ -153,14 +153,14 @@ def expand_graph(
             cypher = """
             MATCH (d:Document {id: $doc_id})
             MATCH p=(target {id: $id})<-[:PREREQUISITE_OF*1..$depth]-(n)
-            WHERE ALL(x IN nodes(p) WHERE (d)-[:CONTAINS]->(x))
+            WHERE ALL(x IN nodes(p) WHERE (d)-[:CONTAINS]->(x)) AND ALL(r IN relationships(p) WHERE r.doc_id = $doc_id)
             RETURN p
             """
         else:
             cypher = """
             MATCH (d:Document {id: $doc_id})
             MATCH p=(target {id: $id})-[:EXTENDS|RELATED_TO*1..$depth]-(n)
-            WHERE ALL(x IN nodes(p) WHERE (d)-[:CONTAINS]->(x))
+            WHERE ALL(x IN nodes(p) WHERE (d)-[:CONTAINS]->(x)) AND ALL(r IN relationships(p) WHERE r.doc_id = $doc_id)
             RETURN p
             """
         
@@ -245,7 +245,7 @@ def get_shortest_path(
         query = """
         MATCH (start {id: $from_id, session_id: $session_id}), (end {id: $to_id, session_id: $session_id})
         MATCH p = shortestPath((start)-[*..10]-(end))
-        WHERE ALL(x IN nodes(p) WHERE x.session_id = $session_id)
+        WHERE ALL(x IN nodes(p) WHERE x.session_id = $session_id) AND ALL(r IN relationships(p) WHERE r.session_id = $session_id)
         RETURN p
         """
         res = neo4j_client.run_query(query, {"from_id": from_id, "to_id": to_id, "session_id": session_id})
@@ -255,7 +255,7 @@ def get_shortest_path(
         MATCH (start {id: $from_id}), (end {id: $to_id})
         WHERE (d)-[:CONTAINS]->(start) AND (d)-[:CONTAINS]->(end)
         MATCH p = shortestPath((start)-[*..10]-(end))
-        WHERE ALL(x IN nodes(p) WHERE (d)-[:CONTAINS]->(x))
+        WHERE ALL(x IN nodes(p) WHERE (d)-[:CONTAINS]->(x)) AND ALL(r IN relationships(p) WHERE r.doc_id = $doc_id)
         RETURN p
         """
         res = neo4j_client.run_query(query, {"from_id": from_id, "to_id": to_id, "doc_id": document_id})

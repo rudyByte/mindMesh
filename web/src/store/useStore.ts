@@ -161,7 +161,7 @@ export const useStore = create<AppState>((set) => ({
       
       // If list is empty, initialize with default pre-seeded session
       if (list.length === 0) {
-        list = [{ id: 'session-1', name: 'MachineLearningTextbook.pdf', created_at: 0 }];
+        list = [{ id: 'session-1', name: 'Session 1', created_at: Date.now() }];
         localStorage.setItem('mindmesh_sessions_list', JSON.stringify(list));
       }
       
@@ -190,21 +190,17 @@ export const useStore = create<AppState>((set) => ({
             const sessionData = JSON.parse(storedData);
             if (sessionData.documents && sessionData.documents.length > 0) {
               s.name = sessionData.documents[0].title;
-            } else if (s.id === 'session-1') {
-              s.name = 'MachineLearningTextbook.pdf';
             } else {
-              if (!s.name || s.name.startsWith('Session ')) {
-                s.name = 'Untitled Session';
+              if (!s.name || s.name === 'MachineLearningTextbook.pdf') {
+                s.name = s.id === 'session-1' ? 'Session 1' : 'Untitled Session';
               }
             }
           } catch (e) {
             console.error('Failed to parse session data for naming', e);
           }
-        } else if (s.id === 'session-1') {
-          s.name = 'MachineLearningTextbook.pdf';
         } else {
-          if (!s.name || s.name.startsWith('Session ')) {
-            s.name = 'Untitled Session';
+          if (!s.name || s.name === 'MachineLearningTextbook.pdf') {
+            s.name = s.id === 'session-1' ? 'Session 1' : 'Untitled Session';
           }
         }
         return s;
@@ -223,17 +219,12 @@ export const useStore = create<AppState>((set) => ({
       let storedData = localStorage.getItem(`mindmesh_session_data_${activeId}`);
       if (activeId === 'session-1' && !storedData) {
         const defaultSessionData = {
-          documents: [{
-            id: 'doc-1',
-            title: 'MachineLearningTextbook.pdf',
-            status: 'done',
-            progress_pct: 100
-          }],
+          documents: [],
           chatMessages: [],
           notes: [],
           highlights: [],
           citations: [],
-          activeDocumentId: 'doc-1'
+          activeDocumentId: null
         };
         localStorage.setItem('mindmesh_session_data_session-1', JSON.stringify(defaultSessionData));
         storedData = JSON.stringify(defaultSessionData);
@@ -356,7 +347,7 @@ export const useStore = create<AppState>((set) => ({
     }
   },
 
-  deleteSession: (id) => {
+  deleteSession: async (id) => {
     if (typeof window === 'undefined') return;
     try {
       const storedList = localStorage.getItem('mindmesh_sessions_list');
@@ -364,6 +355,13 @@ export const useStore = create<AppState>((set) => ({
       
       // Prevent deleting the last session
       if (list.length <= 1) return;
+
+      // Call backend DELETE API
+      try {
+        await fetch(`${API_BASE_URL}/sessions/${id}`, { method: 'DELETE' });
+      } catch (backendErr) {
+        console.error('Failed to delete session on backend:', backendErr);
+      }
       
       const updatedList = list.filter((s: any) => s.id !== id);
       localStorage.setItem('mindmesh_sessions_list', JSON.stringify(updatedList));

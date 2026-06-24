@@ -3,8 +3,9 @@ import os
 import time
 import io
 
-# Setup import path for project root
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+# Setup import path for project root and api
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))) # api folder
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))) # project root
 
 from fastapi.testclient import TestClient
 from api.main import app

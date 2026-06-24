@@ -462,7 +462,10 @@ export default function GraphCanvas() {
               setCanvasError(null);
               setLoading(true);
               try {
-                const response = await fetch(`${API_BASE_URL}/documents/${activeDocumentId || 'doc-1'}/graph`);
+                const graphUrl = sessionId
+                  ? `${API_BASE_URL}/sessions/${sessionId}/graph`
+                  : `${API_BASE_URL}/documents/${activeDocumentId || 'doc-1'}/graph`;
+                const response = await fetch(graphUrl);
                 if (response.ok) {
                   const data = await response.json();
                   setGraphData(data);

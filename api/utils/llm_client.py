@@ -13,19 +13,53 @@ def normalize_and_clean_concept_name(name: str) -> str:
     # Strip trailing punctuation
     n = n.rstrip(',.;:-')
     
-    # Strip leading articles / common determiners if followed by space
-    n_lower = n.lower()
-    articles = ["the", "a", "an", "any", "all", "each", "some", "every", "this", "that", "these", "those"]
-    for art in articles:
-        if n_lower.startswith(art + " "):
-            n = n[len(art) + 1:].strip()
-            n_lower = n.lower()
+    # Strip leading articles/prepositions/conjunctions/noisy words
+    words = n.split()
+    while words:
+        first_word_low = words[0].lower()
+        junk_leading = {
+            "the", "a", "an", "any", "all", "each", "some", "every", "this", "that", "these", "those",
+            "of", "in", "on", "at", "for", "to", "with", "by", "from", "and", "or", "about", "including",
+            "through", "during", "before", "after", "under", "over", "between", "among", "is", "are", "was", "were"
+        }
+        if first_word_low in junk_leading:
+            words.pop(0)
+        else:
             break
             
-    # Capitalize first letter
-    if n and n[0].islower():
-        n = n[0].upper() + n[1:]
-    return n
+    # Strip trailing junk words
+    while words:
+        last_word_low = words[-1].lower()
+        junk_trailing = {
+            "the", "a", "an", "any", "all", "each", "some", "every", "this", "that", "these", "those",
+            "of", "in", "on", "at", "for", "to", "with", "by", "from", "and", "or", "about", "including",
+            "through", "during", "before", "after", "under", "over", "between", "among", "is", "are", "was", "were"
+        }
+        if last_word_low in junk_trailing:
+            words.pop()
+        else:
+            break
+            
+    n = " ".join(words)
+    
+    # Singularize concept name
+    n = singularize_concept_name(n)
+    
+    # Capitalize each word properly (Title Case), while preserving uppercase acronyms (like DFA, NFA, ZKP)
+    words = n.split()
+    capitalized_words = []
+    for w in words:
+        if w.isupper() and len(w) > 1:
+            capitalized_words.append(w)
+        else:
+            if '-' in w:
+                parts = w.split('-')
+                w = '-'.join([p[0].upper() + p[1:] if p else '' for p in parts])
+            else:
+                w = w[0].upper() + w[1:] if w else ''
+            capitalized_words.append(w)
+            
+    return " ".join(capitalized_words)
 
 GENERIC_BLACKLIST = {
     # Pronouns & basic structural words
@@ -70,7 +104,20 @@ GENERIC_BLACKLIST = {
     # Computer science generic terms (isolated)
     "input", "output", "string", "strings", "cont", "cont.", "continued", "number", "numbers", "symbol", "symbols", 
     "character", "characters", "word", "words", "state", "states", "transition", "transitions", "diagram", "diagrams", 
-    "theory", "theories", "theorem", "theorems", "definition", "definitions", "proof", "proofs"
+    "theory", "theories", "theorem", "theorems", "definition", "definitions", "proof", "proofs",
+    # Academic/document generic terms & textbook fillers
+    "syllabus", "syllabi", "prepared", "prepared by", "lecture", "lectures", "course", "courses",
+    "semester", "semesters", "academic", "year", "years", "issue", "issues", "journal", "journals",
+    "review", "reviews", "downloaded", "download", "uploaded", "upload", "online", "offline",
+    "website", "websites", "url", "urls", "http", "https", "www", "com", "org", "edu", "gov", "net",
+    "page number", "page numbers", "header", "headers", "footer", "footers",
+    "homework", "assignment", "assignments", "exam", "exams", "quiz", "quizzes", "practice",
+    "unsolved", "solved", "exercise", "exercises", "question", "questions", "answer", "answers",
+    "publisher", "publishing", "edition", "isbn", "copyright", "all rights reserved", "printed in", "library of congress",
+    "web", "email", "mail", "unknown", "null", "none", "undefined", "n/a", "na",
+    "chapter 1", "chapter 2", "chapter 3", "chapter 4", "chapter 5", "chapter 6",
+    "section 1", "section 2", "section 3", "section 4", "section 5", "section 6",
+    "table 1", "table 2", "table 3", "figure 1", "figure 2", "figure 3"
 }
 
 def calculate_entity_quality(name: str, label: str) -> float:
