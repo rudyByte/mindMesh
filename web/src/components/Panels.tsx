@@ -273,14 +273,15 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
             <Plus className="w-3.5 h-3.5" />
           </button>
         </div>
-        <div className="flex items-center gap-1.5 w-full">
+        <div className="flex items-center gap-1.5 w-full min-w-0">
           <select
             value={sessionId || ''}
             onChange={(e) => switchSession(e.target.value)}
-            className="flex-1 px-2.5 py-1.5 rounded-lg bg-[#030c0b] border border-cyan-500/20 text-xs font-medium text-slate-200 focus:outline-none focus:border-cyan-500/50 cursor-pointer"
+            title={sessionsList.find(s => s.id === sessionId)?.name || ''}
+            className="flex-1 min-w-0 w-full px-2.5 py-1.5 rounded-lg bg-[#030c0b] border border-cyan-500/20 text-xs font-medium text-slate-200 focus:outline-none focus:border-cyan-500/50 cursor-pointer truncate"
           >
             {sessionsList.map((session) => (
-              <option key={session.id} value={session.id}>
+              <option key={session.id} value={session.id} title={session.name}>
                 {session.name}
               </option>
             ))}
@@ -288,8 +289,9 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
           {sessionsList.length > 1 && (
             <button
               onClick={() => sessionId && deleteSession(sessionId)}
-              className="p-2 bg-rose-950/20 hover:bg-rose-900/40 text-rose-400 hover:text-rose-300 rounded-lg border border-rose-500/10 hover:border-rose-500/35 transition-all cursor-pointer"
+              className="flex-shrink-0 p-2 bg-rose-950/20 hover:bg-rose-900/40 text-rose-400 hover:text-rose-300 rounded-lg border border-rose-500/10 hover:border-rose-500/35 transition-all cursor-pointer flex items-center justify-center"
               title="Delete Active Session"
+              aria-label="Delete Active Session"
             >
               <Trash className="w-3.5 h-3.5" />
             </button>
