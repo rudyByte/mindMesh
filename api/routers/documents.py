@@ -798,12 +798,60 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
 async def upload_document(
     background_tasks: BackgroundTasks, 
     file: UploadFile = File(...),
-    session_id: Optional[str] = Query(None)
+    session_id: Optional[str] = Query(None),
+    replace_doc_id: Optional[str] = Query(None)
 ):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF documents are supported.")
         
     try:
+        # 1. Delete document to be replaced if specified
+        if replace_doc_id:
+            if neo4j_client.is_mock():
+                doc = neo4j_client.mock_nodes.get(replace_doc_id)
+                if doc and doc.get("label") == "Document":
+                    if session_id and doc.get("session_id") != session_id:
+                        raise HTTPException(status_code=403, detail="Access denied. Document to replace does not belong to this session.")
+                    url = doc.get("storage_url", "")
+                else:
+                    url = ""
+            else:
+                query = "MATCH (d:Document {id: $doc_id}) RETURN d.storage_url as url, d.session_id as session_id"
+                res = neo4j_client.run_query(query, {"doc_id": replace_doc_id})
+                if res:
+                    record = res[0]
+                    if session_id and record.get("session_id") != session_id:
+                        raise HTTPException(status_code=403, detail="Access denied. Document to replace does not belong to this session.")
+                    url = record.get("url") or record.get("storage_url") or ""
+                else:
+                    url = ""
+
+            if url:
+                import os
+                if url.startswith("file:///"):
+                    filename = os.path.basename(url)
+                    supabase_client.delete_file("documents", filename)
+                else:
+                    match = re.search(r'documents/(uploads/.*)', url)
+                    if match:
+                        path = match.group(1)
+                        supabase_client.delete_file("documents", path)
+
+            if neo4j_client.is_mock():
+                neo4j_client.mock_nodes.pop(replace_doc_id, None)
+                nodes_to_delete = {nid for nid, n in neo4j_client.mock_nodes.items() if n.get("doc_id") == replace_doc_id}
+                for nid in nodes_to_delete:
+                    neo4j_client.mock_nodes.pop(nid, None)
+                neo4j_client.mock_edges = [
+                    e for e in neo4j_client.mock_edges 
+                    if e.get("doc_id") != replace_doc_id and e["from"] != replace_doc_id and e["to"] != replace_doc_id
+                ]
+                extraction_status_cache.pop(replace_doc_id, None)
+            else:
+                neo4j_client.run_query("MATCH (n) WHERE n.doc_id = $doc_id DETACH DELETE n", {"doc_id": replace_doc_id})
+                neo4j_client.run_query("MATCH (d:Document {id: $doc_id}) DETACH DELETE d", {"doc_id": replace_doc_id})
+                extraction_status_cache.pop(replace_doc_id, None)
+
         # Read file bytes
         file_bytes = await file.read()
 

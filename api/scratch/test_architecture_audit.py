@@ -180,9 +180,76 @@ def test_ingestion_failure_cleanup():
 
     print("[PASS] Ingestion failure cleanup verification passed.")
 
+def test_replace_document_workflow():
+    """
+    Test that uploading a document with a replace_doc_id deletes the previous document,
+    completely purges its associated nodes/edges, and creates the new document structure.
+    """
+    if neo4j_client.is_mock():
+        neo4j_client.mock_nodes.clear()
+        neo4j_client.mock_edges.clear()
+
+    session_id = "test-replace-session"
+    doc_old = "doc-old-id"
+    node_old = "node-old-id"
+
+    # Seed old document and concept
+    if neo4j_client.is_mock():
+        neo4j_client.mock_nodes[doc_old] = {
+            "id": doc_old,
+            "label": "Document",
+            "title": "OldTextbook.pdf",
+            "session_id": session_id,
+            "storage_url": "file:///uploads/OldTextbook.pdf"
+        }
+        neo4j_client.mock_nodes[node_old] = {
+            "id": node_old,
+            "label": "Concept",
+            "name": "Old Concept",
+            "doc_id": doc_old,
+            "session_id": session_id
+        }
+        neo4j_client.mock_edges.append({
+            "from": doc_old,
+            "to": node_old,
+            "type": "CONTAINS",
+            "doc_id": doc_old,
+            "session_id": session_id
+        })
+    else:
+        neo4j_client.run_query("MATCH (n) DETACH DELETE n")
+        neo4j_client.run_query("CREATE (d:Document {id: $id, title: 'OldTextbook.pdf', session_id: $session_id, storage_url: 'file:///uploads/OldTextbook.pdf'})", {"id": doc_old, "session_id": session_id})
+        neo4j_client.run_query("CREATE (c:Concept {id: $id, name: 'Old Concept', doc_id: $doc_id, session_id: $session_id})", {"id": node_old, "doc_id": doc_old, "session_id": session_id})
+        neo4j_client.run_query("MATCH (d:Document {id: $doc_id}), (c:Concept {id: $c_id}) MERGE (d)-[:CONTAINS]->(c)", {"doc_id": doc_old, "c_id": node_old})
+
+    # Call POST /documents/upload with replace_doc_id
+    import io
+    file_data = {"file": ("new_doc.pdf", io.BytesIO(b"dummy pdf bytes"), "application/pdf")}
+    res = client.post(
+        f"/documents/upload?session_id={session_id}&replace_doc_id={doc_old}",
+        files=file_data
+    )
+    assert res.status_code == 200
+    new_doc_id = res.json()["id"]
+
+    # Verify that the old document and old concept are completely purged from database/mock
+    if neo4j_client.is_mock():
+        assert doc_old not in neo4j_client.mock_nodes
+        assert node_old not in neo4j_client.mock_nodes
+        assert len([e for e in neo4j_client.mock_edges if e.get("doc_id") == doc_old]) == 0
+    else:
+        old_doc_res = neo4j_client.run_query("MATCH (d:Document {id: $id}) RETURN d", {"id": doc_old})
+        old_nodes_res = neo4j_client.run_query("MATCH (n) WHERE n.doc_id = $doc_id RETURN count(n) as cnt", {"doc_id": doc_old})
+        assert len(old_doc_res) == 0
+        assert old_nodes_res[0]["cnt"] == 0
+
+    print("[PASS] Replace document workflow verification passed.")
+
 if __name__ == "__main__":
     test_label_interchangeability_and_duplicate_prevention()
     test_copilot_session_and_document_isolation()
     test_citations_and_highlights_session_isolation()
     test_ingestion_failure_cleanup()
+    test_replace_document_workflow()
     print("\nALL ARCHITECTURE AUDIT REGRESSION TESTS PASSED SUCCESSFULLY!")
+

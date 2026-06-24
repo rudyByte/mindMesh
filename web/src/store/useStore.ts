@@ -78,6 +78,7 @@ interface AppState {
   documents: DocumentInfo[];
   addDocument: (doc: DocumentInfo) => void;
   updateDocumentStatus: (id: string, status: string, progress_pct: number) => void;
+  removeDocument: (docId: string) => void;
 
   // Chat state
   chatMessages: ChatMessage[];
@@ -517,6 +518,13 @@ export const useStore = create<AppState>((set) => ({
     );
     saveSessionLocal(state.sessionId, { documents: docs });
     return { documents: docs };
+  }),
+  removeDocument: (id) => set((state) => {
+    const docs = state.documents.filter((doc) => doc.id !== id);
+    saveSessionLocal(state.sessionId, { documents: docs });
+    const nextActiveId = state.activeDocumentId === id ? null : state.activeDocumentId;
+    saveSessionLocal(state.sessionId, { activeDocumentId: nextActiveId });
+    return { documents: docs, activeDocumentId: nextActiveId };
   }),
 
   // Chat state

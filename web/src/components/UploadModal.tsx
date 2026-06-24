@@ -23,16 +23,24 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const setActiveDocumentId = useStore((state) => state.setActiveDocumentId);
   const setSelectedNode = useStore((state) => state.setSelectedNode);
   const sessionId = useStore((state) => state.sessionId);
+  const activeDocumentId = useStore((state) => state.activeDocumentId);
+  const documents = useStore((state) => state.documents);
+  const removeDocument = useStore((state) => state.removeDocument);
+
+  const [shouldReplace, setShouldReplace] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Reset state on open if previously completed or failed
   useEffect(() => {
-    if (isOpen && (uploadState === 'done' || uploadState === 'error')) {
-      setUploadState('idle');
-      setProgress(0);
-      setErrorMsg('');
-      setFileName('');
+    if (isOpen) {
+      setShouldReplace(false);
+      if (uploadState === 'done' || uploadState === 'error') {
+        setUploadState('idle');
+        setProgress(0);
+        setErrorMsg('');
+        setFileName('');
+      }
     }
   }, [isOpen]);
 
@@ -93,7 +101,15 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
     formData.append('file', file);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/documents/upload?session_id=${sessionId}`, {
+      let uploadUrl = `${API_BASE_URL}/documents/upload?session_id=${sessionId}`;
+      if (shouldReplace && activeDocumentId) {
+        uploadUrl += `&replace_doc_id=${activeDocumentId}`;
+        removeDocument(activeDocumentId);
+        setGraphData({ nodes: [], edges: [] });
+        setSelectedNode(null);
+      }
+
+      const response = await fetch(uploadUrl, {
         method: 'POST',
         body: formData,
       });
@@ -248,29 +264,49 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
         </div>
 
         {uploadState === 'idle' && (
-          <form 
-            onDragEnter={handleDrag} 
-            onDragOver={handleDrag} 
-            onDragLeave={handleDrag} 
-            onDrop={handleDrop}
-            className={`flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-10 transition-all cursor-pointer ${
-              dragActive ? 'border-cyan-500 bg-cyan-500/10' : 'border-cyan-500/20 bg-cyan-950/5 hover:border-cyan-500/40'
-            }`}
-            onClick={onButtonClick}
-          >
-            <input 
-              ref={fileInputRef}
-              type="file" 
-              className="hidden" 
-              accept=".pdf"
-              onChange={handleChange}
-            />
-            <Upload className="w-10 h-10 text-cyan-500/40 mb-3" />
-            <p className="text-sm font-medium text-slate-300 font-sans">
-              Drag and drop your PDF file here, or <span className="text-cyan-400 hover:text-cyan-300 underline font-semibold">browse</span>
-            </p>
-            <p className="text-xs text-slate-500 mt-1.5 font-sans">Max size 25MB · Text-based PDF only</p>
-          </form>
+          <>
+            <form 
+              onDragEnter={handleDrag} 
+              onDragOver={handleDrag} 
+              onDragLeave={handleDrag} 
+              onDrop={handleDrop}
+              className={`flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-10 transition-all cursor-pointer ${
+                dragActive ? 'border-cyan-500 bg-cyan-500/10' : 'border-cyan-500/20 bg-cyan-950/5 hover:border-cyan-500/40'
+              }`}
+              onClick={onButtonClick}
+            >
+              <input 
+                ref={fileInputRef}
+                type="file" 
+                className="hidden" 
+                accept=".pdf"
+                onChange={handleChange}
+              />
+              <Upload className="w-10 h-10 text-cyan-500/40 mb-3" />
+              <p className="text-sm font-medium text-slate-300 font-sans">
+                Drag and drop your PDF file here, or <span className="text-cyan-400 hover:text-cyan-300 underline font-semibold">browse</span>
+              </p>
+              <p className="text-xs text-slate-500 mt-1.5 font-sans">Max size 25MB · Text-based PDF only</p>
+            </form>
+
+            {activeDocumentId && (
+              <div className="mt-4 p-3 bg-cyan-950/20 rounded-lg border border-cyan-500/10 flex items-center gap-3 animate-fadeIn">
+                <input 
+                  type="checkbox"
+                  id="replace-doc-checkbox"
+                  checked={shouldReplace}
+                  onChange={(e) => setShouldReplace(e.target.checked)}
+                  className="w-4 h-4 rounded border-cyan-500/30 bg-[#030c0b] text-cyan-500 focus:ring-cyan-500/50 cursor-pointer"
+                />
+                <label 
+                  htmlFor="replace-doc-checkbox"
+                  className="text-xs font-semibold text-slate-300 font-sans cursor-pointer select-none"
+                >
+                  Replace active document: <span className="text-cyan-400 font-bold">{(documents.find(d => d.id === activeDocumentId))?.title || 'current document'}</span>
+                </label>
+              </div>
+            )}
+          </>
         )}
 
         {uploadState !== 'idle' && (
