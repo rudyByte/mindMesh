@@ -374,9 +374,15 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         original_count = len(canonical_nodes)
         
         def is_concept_in_text(concept_name: str, text_content: str) -> bool:
-            norm_name = re.sub(r'[^a-z0-9]', '', concept_name.lower())
-            norm_text = re.sub(r'[^a-z0-9]', '', text_content.lower())
-            return norm_name in norm_text
+            if not concept_name:
+                return False
+            cleaned_name = concept_name.strip()
+            # Use word boundaries to search for the concept as a distinct word/phrase
+            pattern = r'\b' + re.escape(cleaned_name) + r'\b'
+            try:
+                return bool(re.search(pattern, text_content, re.IGNORECASE))
+            except Exception:
+                return cleaned_name.lower() in text_content.lower()
             
         canonical_nodes = [n for n in canonical_nodes if is_concept_in_text(n.get("name", ""), text)]
         logger.info(f"Filtered out {original_count - len(canonical_nodes)} nodes not present in the document text.")
@@ -393,6 +399,33 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             to_name = rel.get("to")
             rel_type = rel.get("type", "RELATED_TO").strip()
             
+            # Normalize relationship type
+            normalized_type = rel_type.upper().replace("-", "_").replace(" ", "_")
+            if normalized_type in ["REQUIRES", "PREREQUISITE_OF"]:
+                normalized_type = "PREREQUISITE_OF"
+            elif normalized_type in ["DEPENDS_ON", "DEPENDENCY", "DEPENDENCY_OF"]:
+                normalized_type = "DEPENDS_ON"
+            elif normalized_type in ["USES", "USES_METHOD", "UTILIZES", "EMPLOY"]:
+                normalized_type = "USES"
+            elif normalized_type in ["USED_FOR", "USE_FOR"]:
+                normalized_type = "USED_FOR"
+            elif normalized_type in ["EVALUATED_ON", "EVALUATE_ON", "TESTED_ON"]:
+                normalized_type = "EVALUATED_ON"
+            elif normalized_type in ["EXTENDS", "INHERITS", "SPECIALIZATION_OF"]:
+                normalized_type = "EXTENDS"
+            elif normalized_type in ["CITES", "REFERENCES", "REFERENCED_BY", "CITES_PAPER"]:
+                normalized_type = "CITES"
+            elif normalized_type in ["CONTAINS", "PART_OF", "INCLUDES"]:
+                normalized_type = "CONTAINS"
+            elif normalized_type in ["RELATED_TO", "ASSOCIATED_WITH"]:
+                normalized_type = "RELATED_TO"
+            elif normalized_type in ["AUTHORED_BY", "AUTHOR_OF"]:
+                normalized_type = "AUTHORED_BY"
+            elif normalized_type in ["HAS_KEYWORD"]:
+                normalized_type = "HAS_KEYWORD"
+            else:
+                normalized_type = "RELATED_TO"
+            
             if not from_name or not to_name:
                 continue
                 
@@ -402,13 +435,13 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             if canonical_from.lower().strip() == canonical_to.lower().strip():
                 continue
                 
-            rel_key = (canonical_from, canonical_to, rel_type)
+            rel_key = (canonical_from, canonical_to, normalized_type)
             if rel_key not in seen_rels:
                 seen_rels.add(rel_key)
                 merged_relationships.append({
                     "from": canonical_from,
                     "to": canonical_to,
-                    "type": rel_type
+                    "type": normalized_type
                 })
                 
         # Rank concepts and keywords by importance (TF-IDF + Degree + Frequency)
@@ -452,8 +485,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             idf = math.log((1 + N) / (1 + df)) + 1
             tfidf_map[c_name] = tf * idf
 
-        concepts_keywords = [n for n in canonical_nodes if n.get("label") in ["Concept", "Keyword"]]
-        other_nodes = [n for n in canonical_nodes if n.get("label") not in ["Concept", "Keyword"]]
+        concepts_keywords = [n for n in canonical_nodes if n.get("label") in ["Concept", "Keyword", "Method", "Dataset"]]
+        other_nodes = [n for n in canonical_nodes if n.get("label") not in ["Concept", "Keyword", "Method", "Dataset"]]
 
         # Prioritize noun phrases and technical terms
         def get_priority_bonus(name: str) -> float:
@@ -471,8 +504,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             reverse=True
         )
 
-        # Keep top 40 concepts/keywords
-        kept_concepts_keywords = concepts_keywords[:40]
+        # Keep top 80 concepts/keywords/methods/datasets
+        kept_concepts_keywords = concepts_keywords[:80]
         kept_names = set(n["name"].lower().strip() for n in kept_concepts_keywords)
         for n in other_nodes:
             kept_names.add(n["name"].lower().strip())
@@ -584,7 +617,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         # Write nodes to Neo4j
         for node in canonical_nodes:
             label = node.get("label", "Concept")
-            if label not in ["Concept", "Topic", "Keyword", "Paper", "Author"]:
+            if label not in ["Topic", "Subtopic", "Concept", "Technology", "Framework", "Application", "Paper", "Author", "Keyword", "Method", "Dataset"]:
                 label = "Concept"
             name = node.get("name").strip()
             desc = node.get("description", "").strip()
@@ -676,7 +709,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 for nid, mn in neo4j_client.mock_nodes.items():
                     mn_label = mn.get("label", "Concept")
                     is_label_match = (
-                        (label in ["Concept", "Topic", "Keyword", "Author"] and mn_label in ["Concept", "Topic", "Keyword", "Author"])
+                        (label in ["Concept", "Topic", "Keyword", "Author", "Method", "Dataset"] and mn_label in ["Concept", "Topic", "Keyword", "Author", "Method", "Dataset"])
                         or label == mn_label
                     )
                     if is_label_match and mn.get("name", "").lower() == name.lower():
@@ -716,7 +749,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             if not from_name or not to_name:
                 continue
                 
-            if rel_type not in ["PREREQUISITE_OF", "RELATED_TO", "EXTENDS", "CONTRADICTS", "USES_METHOD", "DEPENDS_ON", "CITES", "AUTHORED_BY", "AFFILIATED_WITH", "MENTIONS", "HAS_KEYWORD"]:
+            if rel_type not in ["PREREQUISITE_OF", "RELATED_TO", "EXTENDS", "CONTRADICTS", "USES", "USES_METHOD", "DEPENDS_ON", "CITES", "AUTHORED_BY", "AFFILIATED_WITH", "MENTIONS", "HAS_KEYWORD", "USED_FOR", "EVALUATED_ON"]:
                 rel_type = "RELATED_TO"
                 
             if session_id:
@@ -883,6 +916,12 @@ async def upload_document(
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF documents are supported.")
         
+    # Sanitize query parameters if called directly in tests as dependency parameters
+    if not isinstance(session_id, str):
+        session_id = None
+    if not isinstance(replace_doc_id, str):
+        replace_doc_id = None
+        
     try:
         # 1. Delete document to be replaced if specified
         if replace_doc_id:
@@ -961,6 +1000,8 @@ async def upload_document(
 
 @router.get("/documents/{id}/status", response_model=StatusResponse)
 def get_document_status(id: str, session_id: Optional[str] = Query(None)):
+    if not isinstance(session_id, str):
+        session_id = None
     # Validate session ownership if session_id is provided
     if session_id:
         if neo4j_client.is_mock():
@@ -993,6 +1034,8 @@ def get_document_status(id: str, session_id: Optional[str] = Query(None)):
 
 @router.get("/documents/{id}/graph")
 def get_document_graph(id: str, session_id: Optional[str] = Query(None)):
+    if not isinstance(session_id, str):
+        session_id = None
     # Validate session ownership if session_id is provided
     if session_id:
         if neo4j_client.is_mock():

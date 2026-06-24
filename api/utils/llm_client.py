@@ -131,7 +131,7 @@ def calculate_entity_quality(name: str, label: str) -> float:
     words_lower = [w.lower() for w in words]
     
     # 1. Keep only meaningful concepts, topics, authors, papers, and keywords
-    valid_labels = {"Concept", "Topic", "Author", "Paper", "Keyword"}
+    valid_labels = {"Topic", "Subtopic", "Concept", "Technology", "Framework", "Application", "Paper", "Author", "Keyword", "Method", "Dataset"}
     if label not in valid_labels:
         return 0.0
         
@@ -329,22 +329,48 @@ class LLMClient:
             return self._run_mock_extraction(text_chunk)
             
         system_prompt = (
-            "You are a strict, grounded knowledge graph extraction engine. Given a text chunk, extract ONLY high-quality concepts, topics, papers, authors, or keywords that are EXPLICITLY mentioned. "
-            "CRITICAL: Do NOT extract pronouns, determiners, connectors, or generic words (e.g., 'Any', 'All', 'Each', 'Even', 'Input', 'String', 'Cont', 'Data', 'System', 'Process', 'Approach', 'Model', 'Connectivity', 'Example'), "
-            "conversational phrases (e.g., 'For Example', 'However', 'Therefore'), section headers ('Chapter 1', 'Section A'), page numbers, or formatting noise. "
-            "CRITICAL: Do NOT extract nodes that contain more than 4 words, look like sentences, or exceed 40 characters. "
-            "Prioritize noun phrases and technical terms (e.g., 'Finite Automata', 'Regular Expression'). Every extracted node must represent a meaningful domain-specific concept, technology, paper, or entity. "
-            "For every extracted node, you MUST write a complete, rich, context-grounded description of at least 2-3 sentences based on the text. Avoid single-word or brief descriptions. "
-            "Do NOT include any external knowledge or assumptions. "
-            "Extract ONLY these node types: Concept, Topic, Keyword, Paper, Author. "
-            "Extract ONLY these relationship types: PREREQUISITE_OF, RELATED_TO, EXTENDS, CONTRADICTS, USES_METHOD, DEPENDS_ON, CITES, AUTHORED_BY, MENTIONS, HAS_KEYWORD. "
+            "You are a strict, grounded knowledge graph extraction engine designed to analyze research papers and build a deep semantic model of their content. "
+            "Your task is to extract meaningful nodes and relationships based on document meaning across all sections (abstract, introduction, methodology, experiments, and conclusion) rather than just isolated keyword extraction. "
+            "Ignore document formatting, syllabus/course guides, page repetitions, and OCR noise.\n\n"
+            "Node categories/labels MUST be one of the following:\n"
+            "- Topic: A primary core topic or main research subject of the document.\n"
+            "- Subtopic: A specialized branch or sub-area belonging to a core Topic.\n"
+            "- Concept: An abstract theoretical idea, model, mathematical model, metric, or definition.\n"
+            "- Method: A specific research method, algorithm, model architecture, mathematical formulation, or technique introduced or utilized in the paper.\n"
+            "- Dataset: A specific dataset, benchmark, corpus, or data source used for training, evaluation, experiments, or testing.\n"
+            "- Technology: A primary physical or software system, hardware platform, protocol, or foundational technology.\n"
+            "- Framework: A software library, toolset, architecture, model repository, or structured system framework.\n"
+            "- Application: A practical use case, implementation scenario, or real-world benefit of a concept/technology.\n"
+            "- Paper: A cited publication, book, or external academic reference.\n"
+            "- Author: A researcher, author, or creator of a technology, method, or paper.\n"
+            "- Keyword: Important terminology or search-level keyword tags.\n\n"
+            "Extract paper-specific hierarchical, causal, and structural relationships using only these types:\n"
+            "- CONTAINS: For hierarchical structures (e.g., Topic contains Subtopic, or Framework contains Concept).\n"
+            "- PREREQUISITE_OF: For prerequisite requirements (e.g. Concept A must be understood before Concept B).\n"
+            "- DEPENDS_ON: For direct dependencies (e.g., Framework A depends on Technology B).\n"
+            "- EXTENDS: For inheritance, specialization, or subclassing (e.g., Subtopic B extends Topic A, or Method B extends Method A).\n"
+            "- USES: For utilization/application (e.g., Method A uses Dataset B, or Framework A uses Concept B, or Method A uses Concept B).\n"
+            "- USED_FOR: For indicating a method is used for a specific task or a dataset is used for evaluation (e.g., Dataset A is USED_FOR Method B, or Method A is USED_FOR Application B).\n"
+            "- EVALUATED_ON: Specifically for linking a method or model to a dataset/benchmark it was tested on (e.g., Method A is EVALUATED_ON Dataset B).\n"
+            "- CITES: For references/citations between papers.\n"
+            "- AUTHORED_BY: For linking a Paper to its Author.\n"
+            "- HAS_KEYWORD: For linking a Paper to a Keyword.\n"
+            "- RELATED_TO: For general semantic association.\n\n"
+            "CRITICAL EXTRACTION GUIDELINES:\n"
+            "1. Deeply parse the document text (spanning Abstract, Introduction, Methodology, Experiments, and Conclusion) to extract the complete knowledge structure.\n"
+            "2. Avoid extracting only high-level or title-level keywords. Extract specific, deep technical concepts, methods, and datasets discussed throughout the text.\n"
+            "3. Aim to extract a rich set of nodes (concepts, methods, datasets, papers, authors) and their relationships. Extract as many meaningful entities and connections as present in the text chunk.\n"
+            "4. Do NOT extract pronouns, determiners, fillers, section numbers, or formatting noise.\n"
+            "5. Do NOT extract nodes that contain more than 4 words, look like sentences, or exceed 40 characters.\n"
+            "6. For every extracted node, you MUST write a complete, rich, context-grounded description of at least 2-3 sentences based strictly on the text. Avoid single-word or brief descriptions.\n\n"
             "Return ONLY valid JSON matching this schema, no prose, no markdown fences:\n"
             "{\n"
             "  \"nodes\": [\n"
-            "    {\"label\": \"Concept\", \"name\": \"Linear Algebra\", \"description\": \"Linear algebra is the branch of mathematics concerning linear equations, linear functions, and their representations through matrices and vector spaces. It forms the mathematical foundation for machine learning algorithms like neural networks.\"}\n"
+            "    {\"label\": \"Method\", \"name\": \"Multi-Head Attention\", \"description\": \"Multi-Head Attention is an attention mechanism running several scaled dot-product attention layers in parallel. It allows the model to jointly attend to information from different representation subspaces at different positions.\"},\n"
+            "    {\"label\": \"Dataset\", \"name\": \"WMT 2014 English-to-German\", \"description\": \"WMT 2014 English-to-German is a standard machine translation dataset containing sentence pairs. It is used as a standard benchmark for evaluating the accuracy of sequence translation models.\"}\n"
             "  ],\n"
             "  \"relationships\": [\n"
-            "    {\"from\": \"Linear Algebra\", \"to\": \"Neural Networks\", \"type\": \"PREREQUISITE_OF\"}\n"
+            "    {\"from\": \"Multi-Head Attention\", \"to\": \"WMT 2014 English-to-German\", \"type\": \"EVALUATED_ON\"}\n"
             "  ]\n"
             "}\n"
             "Strict grounding constraint: The extracted nodes and relationships MUST reside strictly within the bounds of the provided text. Do not invent concepts or reference external context not present in the text."
@@ -437,70 +463,88 @@ class LLMClient:
         if "attention" in text_chunk_lower or "transformer" in text_chunk_lower or "encoder" in text_chunk_lower or "decoder" in text_chunk_lower:
             logger.info("[MOCK] Returning custom unified Transformer/Attention knowledge graph.")
             nodes = [
-                {"label": "Topic", "name": "Transformer Architecture", "description": "A novel neural network architecture based solely on self-attention mechanisms, dispensing with recurrence and convolutions entirely."},
-                {"label": "Concept", "name": "Encoder Stack", "description": "A stack of N=6 identical layers, each containing a multi-head self-attention mechanism and a position-wise feed-forward network."},
-                {"label": "Concept", "name": "Decoder Stack", "description": "A stack of N=6 identical layers that includes self-attention, encoder-decoder attention, and feed-forward sub-layers."},
-                {"label": "Concept", "name": "Scaled Dot-Product Attention", "description": "An attention function computing dot products of queries and keys, scaled by the square root of their dimension, followed by a softmax."},
-                {"label": "Concept", "name": "Multi-Head Attention", "description": "An attention mechanism running several scaled dot-product attention layers in parallel over projected queries, keys, and values."},
-                {"label": "Concept", "name": "Self-Attention", "description": "An attention mechanism relating different positions of a single sequence to compute a representation of the sequence."},
-                {"label": "Concept", "name": "Encoder-Decoder Attention", "description": "A sub-layer in the decoder stack performing multi-head attention over the output of the encoder stack."},
-                {"label": "Concept", "name": "Position-wise Feed-Forward Networks", "description": "Fully connected sub-layers applied to each position separately and identically in the encoder and decoder layers."},
-                {"label": "Concept", "name": "Positional Encoding", "description": "Sinusoidal functions added to input embeddings to inject information about the relative or absolute positions of tokens."},
-                {"label": "Concept", "name": "Learned Embeddings", "description": "Shared weight matrix embeddings mapping input and output tokens to continuous representation vectors of dimension d_model."},
-                {"label": "Concept", "name": "Residual Connections", "description": "Additive skip connections around each sub-layer followed by layer normalization to facilitate deep gradient flow."},
-                {"label": "Concept", "name": "Label Smoothing", "description": "A regularization technique introducing uncertainty during training to improve model generalization and BLEU score."},
-                {"label": "Concept", "name": "Residual Dropout", "description": "Regularization applying dropout to sub-layer outputs and embedding sums to prevent overfitting."},
-                {"label": "Concept", "name": "Adam Optimizer", "description": "Optimization algorithm utilizing adaptive estimates of lower-order moments with learning rate warmup."},
-                {"label": "Concept", "name": "Sequence Transduction", "description": "The general task of mapping an input sequence of symbols to an output sequence of symbols, such as machine translation."},
-                {"label": "Concept", "name": "BLEU Score", "description": "Bilingual Evaluation Understudy metric used to evaluate machine translation quality compared to human translations."},
-                # Extracted Paper and Authors
-                {"label": "Paper", "name": "Attention Is All You Need", "description": "The landmark paper introducing the Transformer architecture, replacing RNNs/CNNs with self-attention for sequence transduction tasks.", "year": 2017, "doi": "10.48550/arXiv.1706.03762"},
-                {"label": "Author", "name": "Ashish Vaswani", "description": "Lead author of Attention Is All You Need and researcher at Google Brain."},
-                {"label": "Author", "name": "Noam Shazeer", "description": "Co-author of Attention Is All You Need, known for key contributions to Transformer training scalability."},
-                {"label": "Author", "name": "Niki Parmar", "description": "Co-author of Attention Is All You Need and AI researcher at Google Brain."},
-                {"label": "Author", "name": "Jakob Uszkoreit", "description": "Co-author of Attention Is All You Need, senior software engineer and AI researcher."},
-                # Keywords
-                {"label": "Keyword", "name": "Deep Learning", "description": "A subset of machine learning based on artificial neural networks with representation learning."},
-                {"label": "Keyword", "name": "Natural Language Processing", "description": "Interactions between computers and human languages, focusing on processing and analyzing large natural language data."},
-                {"label": "Keyword", "name": "Optimization Algorithms", "description": "Methods used to minimize loss functions and train neural network models."}
+                {"label": "Topic", "name": "Transformer Architecture", "description": "The Transformer architecture is a novel sequence transduction model based entirely on self-attention mechanisms. It dispenses with recurrence and convolutions, relying on stacked self-attention and position-wise feed-forward layers to process sequences in parallel."},
+                {"label": "Framework", "name": "Encoder Stack", "description": "The Encoder Stack is composed of a stack of six identical layers. Each layer contains two sub-layers: a multi-head self-attention mechanism and a position-wise fully connected feed-forward network. It maps an input sequence of symbol representations to a continuous sequence of representations."},
+                {"label": "Framework", "name": "Decoder Stack", "description": "The Decoder Stack consists of a stack of six identical layers. In addition to the two sub-layers in each encoder layer, the decoder inserts a third sub-layer which performs multi-head attention over the output of the encoder stack. It also utilizes masked self-attention to prevent positions from attending to subsequent positions."},
+                {"label": "Method", "name": "Self-Attention", "description": "Self-Attention, also known as intra-attention, is an attention mechanism relating different positions of a single sequence in order to compute a representation of the sequence. It has been used successfully in a variety of tasks including reading comprehension, abstractive summarization, and textual entailment."},
+                {"label": "Method", "name": "Multi-Head Attention", "description": "Multi-Head Attention projects queries, keys, and values linearly h times with different, learned linear projections to dk, dk, and dv dimensions, respectively. On each of these projected versions of queries, keys, and values, attention is performed in parallel, yielding dv-dimensional output values. These are concatenated and projected, resulting in final values."},
+                {"label": "Method", "name": "Scaled Dot-Product Attention", "description": "Scaled Dot-Product Attention is an attention function where the input consists of queries and keys of dimension dk, and values of dimension dv. It computes the dot products of the query with all keys, divides each by the square root of dk, and applies a softmax function to obtain the weights on the values. It is extremely fast and space-efficient in practice."},
+                {"label": "Method", "name": "Encoder-Decoder Attention", "description": "Encoder-Decoder Attention is a sub-layer in the decoder stack where the queries come from the previous decoder layer, and the memory keys and values come from the output of the encoder. This allows every position in the decoder to attend over all positions in the input sequence, mimicking the typical encoder-decoder attention mechanisms in sequence-to-sequence models."},
+                {"label": "Method", "name": "Position-wise Feed-Forward Networks", "description": "Position-wise Feed-Forward Networks are applied to each position separately and identically in both the encoder and decoder stacks. This consists of two linear transformations with a ReLU activation in between. While the linear transformations are identical across different positions, they use different parameters from layer to layer."},
+                {"label": "Concept", "name": "Positional Encoding", "description": "Positional Encodings are added to the input embeddings at the bottoms of the encoder and decoder stacks to inject information about the relative or absolute positions of tokens in the sequence. Since the Transformer architecture contains no recurrence or convolution, it requires positional encodings to make use of the order of the sequence."},
+                {"label": "Concept", "name": "Learned Embeddings", "description": "Learned Embeddings are used to convert the input tokens and output tokens to vectors of dimension d_model. The model shares the same weight matrix between the two embedding layers and the pre-softmax linear transformation. This maps discrete vocabulary tokens into continuous representation spaces."},
+                {"label": "Concept", "name": "Residual Connections", "description": "Residual Connections are skip connections employed around each of the sub-layers in both the encoder and decoder. Each sub-layer output is followed by layer normalization. This structural layout helps preserve gradient flow and enables stable optimization of extremely deep architectures."},
+                {"label": "Method", "name": "Layer Normalization", "description": "Layer Normalization is an normalization technique applied after residual connections in the encoder and decoder stacks. It normalizes the activations across all features in a layer for each individual training example. This stabilizes the dynamics of training and reduces training time significantly."},
+                {"label": "Method", "name": "Softmax Function", "description": "The Softmax Function is a mathematical function that converts a vector of numbers into a vector of probabilities that sum to one. In the Transformer, it is used in the attention calculation to compute weight distributions over values and at the final layer to predict next-token probabilities."},
+                {"label": "Method", "name": "Adam Optimizer", "description": "The Adam Optimizer is an optimization algorithm that uses adaptive learning rates for training deep neural networks. In the Transformer paper, it is used with beta1=0.9, beta2=0.98, and epsilon=1e-9. The learning rate is varied dynamically during training according to a formula that increases linearly for warmup steps and decreases thereafter."},
+                {"label": "Concept", "name": "Residual Dropout", "description": "Residual Dropout is a regularization technique where dropout is applied to the output of each sub-layer, before it is added to the sub-layer input and normalized. It is also applied to the sums of the embeddings and positional encodings in both the encoder and decoder stacks. This reduces overfitting during training."},
+                {"label": "Concept", "name": "Label Smoothing", "description": "Label Smoothing is a regularization technique that introduces uncertainty during training by preventing the model from predicting classes too confidently. During training, label smoothing of value 0.1 was employed. This hurts perplexity as the model learns to be more unsure, but improves accuracy and BLEU score overall."},
+                {"label": "Method", "name": "BPE Tokenization", "description": "Byte-Pair Encoding (BPE) Tokenization is a subword tokenization technique used to split text into subword units. In the Transformer paper, English-German translation was performed using a shared source-target vocabulary constructed with byte-pair encoding. It helps handle out-of-vocabulary words cleanly by breaking them down into known subwords."},
+                {"label": "Concept", "name": "BLEU Score", "description": "Bilingual Evaluation Understudy (BLEU) Score is an algorithm for evaluating the quality of text which has been machine-translated from one natural language to another. Quality is measured by comparing the machine translation outputs with human reference translations. It ranges from 0 to 1, with higher scores indicating higher quality."},
+                {"label": "Concept", "name": "Sequence Transduction", "description": "Sequence Transduction is the general task of mapping an input sequence of symbols to an output sequence of symbols. Examples include machine translation, text-to-speech, and automatic speech recognition. Traditionally, these models relied on recurrent neural networks or convolutional neural networks."},
+                {"label": "Concept", "name": "Vanishing Gradient Problem", "description": "The Vanishing Gradient Problem is a difficulty in training artificial neural networks with gradient-based learning methods. Backpropagated gradients can decrease exponentially as they travel backward through deep layers, halting learning. The Transformer mitigates this using residual connections and layer normalization."},
+                {"label": "Concept", "name": "Sequence Alignment", "description": "Sequence Alignment is the task of mapping corresponding segments or tokens between sequences. In machine translation, alignment determines which words in the source sentence translate to which words in the target. The Transformer uses self-attention to dynamically align and weigh tokens without recurrence."},
+                {"label": "Dataset", "name": "WMT 2014 English-to-German", "description": "WMT 2014 English-to-German is a standard machine translation dataset consisting of 4.5 million sentence pairs. It is used as the primary benchmark to evaluate translation models. The Transformer achieved a record BLEU score of 28.4 on this dataset, outperforming previous state-of-the-art models."},
+                {"label": "Dataset", "name": "WMT 2014 English-to-French", "description": "WMT 2014 English-to-French is a large machine translation dataset consisting of 36 million sentence pairs. It is used to test the scalability of translation models on massive data. The Transformer achieved a BLEU score of 41.8 on this dataset after training for 3 days."},
+                {"label": "Paper", "name": "Attention Is All You Need", "description": "Attention Is All You Need is the landmark paper published by researchers at Google Brain in 2017. It introduced the Transformer architecture, showing that self-attention alone could replace recurrence and convolution for state-of-the-art sequence translation. It is one of the most cited AI papers of all time.", "year": 2017, "doi": "10.48550/arXiv.1706.03762"},
+                {"label": "Paper", "name": "Neural Machine Translation by Jointly Learning to Align and Translate", "description": "Neural Machine Translation by Jointly Learning to Align and Translate is a foundational paper by Dzmitry Bahdanau, Kyunghyun Cho, and Yoshua Bengio in 2014. It introduced the concept of soft-attention in neural machine translation, allowing a model to search for relevant source positions dynamically. The Transformer builds directly on this soft-attention concept.", "year": 2014, "doi": "10.48550/arXiv.1409.0473"},
+                {"label": "Author", "name": "Ashish Vaswani", "description": "Ashish Vaswani is a co-author of the paper 'Attention Is All You Need' and was a prominent researcher at Google Brain. He contributed significantly to the core design of the Transformer architecture and attention mechanism formulations."},
+                {"label": "Author", "name": "Noam Shazeer", "description": "Noam Shazeer is a co-author of 'Attention Is All You Need' and was a senior researcher at Google Brain. He is known for key scaling contributions, optimizer selection, and multi-head attention optimizations that made the Transformer trainable."},
+                {"label": "Author", "name": "Niki Parmar", "description": "Niki Parmar is a co-author of 'Attention Is All You Need' and worked as an AI researcher at Google Brain. She focused on sequence transduction model scaling and performance evaluation on English-to-German and English-to-French benchmarks."},
+                {"label": "Author", "name": "Jakob Uszkoreit", "description": "Jakob Uszkoreit is a co-author of 'Attention Is All You Need' who initiated the idea of replacing recurrent networks with self-attention. He has made major contributions to natural language processing and neural model design."},
+                {"label": "Author", "name": "Aidan N. Gomez", "description": "Aidan N. Gomez is a co-author of 'Attention Is All You Need' who conducted deep experiments on hyperparameters, dropout regularizations, and learning rate warmups. He is the co-founder and CEO of Cohere."},
+                {"label": "Author", "name": "Lukasz Kaiser", "description": "Lukasz Kaiser is a co-author of 'Attention Is All You Need' and researcher at Google Brain. He contributed to the software implementation of the model in Tensor2Tensor and optimization algorithms."},
+                {"label": "Author", "name": "Illia Polosukhin", "description": "Illia Polosukhin is a co-author of 'Attention Is All You Need' and former researcher at Google. He worked on attention model evaluations and later co-founded NEAR Protocol."},
+                {"label": "Author", "name": "Dzmitry Bahdanau", "description": "Dzmitry Bahdanau is the lead author of the 2014 alignment paper and a pioneer in attention mechanisms. His work on dynamic soft alignment laid the foundation for modern attention architectures."},
+                {"label": "Keyword", "name": "Deep Learning", "description": "Deep Learning is a subset of machine learning based on multi-layered artificial neural networks. It enables learning representations directly from raw data, powering modern computer vision and natural language processing applications."},
+                {"label": "Keyword", "name": "Natural Language Processing", "description": "Natural Language Processing (NLP) is a branch of artificial intelligence concerned with the interaction between computers and human languages. Tasks include translation, sentiment analysis, named entity recognition, and question answering."},
+                {"label": "Keyword", "name": "Machine Translation", "description": "Machine Translation is the sub-field of computational linguistics that focuses on using software to translate text or speech from one natural language to another. The Transformer revolutionized this field by setting new translation benchmarks."}
             ]
             relationships = [
-                {"from": "Transformer Architecture", "to": "Encoder Stack", "type": "USES_METHOD"},
-                {"from": "Transformer Architecture", "to": "Decoder Stack", "type": "USES_METHOD"},
-                {"from": "Transformer Architecture", "to": "Self-Attention", "type": "USES_METHOD"},
-                {"from": "Transformer Architecture", "to": "Positional Encoding", "type": "USES_METHOD"},
-                {"from": "Transformer Architecture", "to": "Sequence Transduction", "type": "RELATED_TO"},
-                {"from": "Transformer Architecture", "to": "Learned Embeddings", "type": "USES_METHOD"},
-                {"from": "Transformer Architecture", "to": "Adam Optimizer", "type": "USES_METHOD"},
-                {"from": "Transformer Architecture", "to": "Label Smoothing", "type": "USES_METHOD"},
-                {"from": "Encoder Stack", "to": "Multi-Head Attention", "type": "USES_METHOD"},
-                {"from": "Encoder Stack", "to": "Position-wise Feed-Forward Networks", "type": "USES_METHOD"},
-                {"from": "Encoder Stack", "to": "Residual Connections", "type": "USES_METHOD"},
-                {"from": "Decoder Stack", "to": "Multi-Head Attention", "type": "USES_METHOD"},
-                {"from": "Decoder Stack", "to": "Encoder-Decoder Attention", "type": "USES_METHOD"},
-                {"from": "Decoder Stack", "to": "Position-wise Feed-Forward Networks", "type": "USES_METHOD"},
-                {"from": "Decoder Stack", "to": "Residual Connections", "type": "USES_METHOD"},
-                {"from": "Multi-Head Attention", "to": "Scaled Dot-Product Attention", "type": "DEPENDS_ON"},
-                {"from": "Multi-Head Attention", "to": "Self-Attention", "type": "RELATED_TO"},
-                {"from": "Encoder-Decoder Attention", "to": "Encoder Stack", "type": "DEPENDS_ON"},
-                {"from": "Encoder-Decoder Attention", "to": "Decoder Stack", "type": "DEPENDS_ON"},
-                {"from": "Encoder-Decoder Attention", "to": "Multi-Head Attention", "type": "USES_METHOD"},
-                {"from": "Positional Encoding", "to": "Learned Embeddings", "type": "RELATED_TO"},
-                {"from": "Residual Connections", "to": "Residual Dropout", "type": "RELATED_TO"},
-                {"from": "Label Smoothing", "to": "BLEU Score", "type": "RELATED_TO"},
-                {"from": "Residual Dropout", "to": "BLEU Score", "type": "RELATED_TO"},
-                {"from": "Adam Optimizer", "to": "BLEU Score", "type": "RELATED_TO"},
-                # Paper & Author relationships
                 {"from": "Attention Is All You Need", "to": "Ashish Vaswani", "type": "AUTHORED_BY"},
                 {"from": "Attention Is All You Need", "to": "Noam Shazeer", "type": "AUTHORED_BY"},
                 {"from": "Attention Is All You Need", "to": "Niki Parmar", "type": "AUTHORED_BY"},
                 {"from": "Attention Is All You Need", "to": "Jakob Uszkoreit", "type": "AUTHORED_BY"},
-                {"from": "Attention Is All You Need", "to": "Transformer Architecture", "type": "USES_METHOD"},
-                {"from": "Attention Is All You Need", "to": "Self-Attention", "type": "USES_METHOD"},
-                # Keyword links
+                {"from": "Attention Is All You Need", "to": "Aidan N. Gomez", "type": "AUTHORED_BY"},
+                {"from": "Attention Is All You Need", "to": "Lukasz Kaiser", "type": "AUTHORED_BY"},
+                {"from": "Attention Is All You Need", "to": "Illia Polosukhin", "type": "AUTHORED_BY"},
+                {"from": "Neural Machine Translation by Jointly Learning to Align and Translate", "to": "Dzmitry Bahdanau", "type": "AUTHORED_BY"},
+                {"from": "Attention Is All You Need", "to": "Neural Machine Translation by Jointly Learning to Align and Translate", "type": "CITES"},
+                {"from": "Attention Is All You Need", "to": "Transformer Architecture", "type": "USES"},
+                {"from": "Transformer Architecture", "to": "Encoder Stack", "type": "CONTAINS"},
+                {"from": "Transformer Architecture", "to": "Decoder Stack", "type": "CONTAINS"},
+                {"from": "Encoder Stack", "to": "Multi-Head Attention", "type": "USES"},
+                {"from": "Decoder Stack", "to": "Multi-Head Attention", "type": "USES"},
+                {"from": "Decoder Stack", "to": "Encoder-Decoder Attention", "type": "USES"},
+                {"from": "Multi-Head Attention", "to": "Scaled Dot-Product Attention", "type": "USES"},
+                {"from": "Scaled Dot-Product Attention", "to": "Softmax Function", "type": "USES"},
+                {"from": "Multi-Head Attention", "to": "Self-Attention", "type": "USES"},
+                {"from": "Encoder Stack", "to": "Position-wise Feed-Forward Networks", "type": "USES"},
+                {"from": "Decoder Stack", "to": "Position-wise Feed-Forward Networks", "type": "USES"},
+                {"from": "Encoder Stack", "to": "Residual Connections", "type": "USES"},
+                {"from": "Decoder Stack", "to": "Residual Connections", "type": "USES"},
+                {"from": "Residual Connections", "to": "Layer Normalization", "type": "USES"},
+                {"from": "Transformer Architecture", "to": "Positional Encoding", "type": "USES"},
+                {"from": "Transformer Architecture", "to": "Learned Embeddings", "type": "USES"},
+                {"from": "Transformer Architecture", "to": "Adam Optimizer", "type": "USES"},
+                {"from": "Transformer Architecture", "to": "BPE Tokenization", "type": "USES"},
+                {"from": "Transformer Architecture", "to": "Residual Dropout", "type": "USES"},
+                {"from": "Transformer Architecture", "to": "Label Smoothing", "type": "USES"},
+                {"from": "Transformer Architecture", "to": "WMT 2014 English-to-German", "type": "EVALUATED_ON"},
+                {"from": "Transformer Architecture", "to": "WMT 2014 English-to-French", "type": "EVALUATED_ON"},
+                {"from": "BPE Tokenization", "to": "WMT 2014 English-to-German", "type": "USED_FOR"},
+                {"from": "BLEU Score", "to": "WMT 2014 English-to-German", "type": "EVALUATED_ON"},
+                {"from": "BLEU Score", "to": "WMT 2014 English-to-French", "type": "EVALUATED_ON"},
+                {"from": "Label Smoothing", "to": "BLEU Score", "type": "RELATED_TO"},
+                {"from": "Residual Dropout", "to": "BLEU Score", "type": "RELATED_TO"},
+                {"from": "Sequence Transduction", "to": "Machine Translation", "type": "RELATED_TO"},
+                {"from": "Transformer Architecture", "to": "Sequence Transduction", "type": "USED_FOR"},
+                {"from": "Neural Machine Translation by Jointly Learning to Align and Translate", "to": "Sequence Transduction", "type": "USED_FOR"},
+                {"from": "Vanishing Gradient Problem", "to": "Residual Connections", "type": "RELATED_TO"},
+                {"from": "Sequence Alignment", "to": "Self-Attention", "type": "RELATED_TO"},
                 {"from": "Attention Is All You Need", "to": "Deep Learning", "type": "HAS_KEYWORD"},
                 {"from": "Attention Is All You Need", "to": "Natural Language Processing", "type": "HAS_KEYWORD"},
-                {"from": "Attention Is All You Need", "to": "Optimization Algorithms", "type": "HAS_KEYWORD"}
+                {"from": "Attention Is All You Need", "to": "Machine Translation", "type": "HAS_KEYWORD"}
             ]
             return {"nodes": nodes, "relationships": relationships}
 
@@ -508,36 +552,39 @@ class LLMClient:
             logger.info("[MOCK] Returning custom unified blockchain voting system knowledge graph.")
             nodes = [
                 {"label": "Topic", "name": "Secure Online Voting System", "description": "A secure, transparent, and tamper-proof online voting system using Blockchain that eliminates central administrator trust."},
-                {"label": "Concept", "name": "Zero-Knowledge Proofs", "description": "Cryptographic proofs enabling verification of voter eligibility without disclosing voter identity, preventing duplicate voting."},
-                {"label": "Concept", "name": "Blind Signatures", "description": "Cryptographic signatures that validate the voting token without revealing voter identity, preventing voter-vote linkage."},
-                {"label": "Concept", "name": "Commit-Reveal Mechanism", "description": "A two-phase voting protocol (commit and reveal) to prevent vote tampering during the active voting phase."},
-                {"label": "Concept", "name": "Decentralized Identity", "description": "A privacy-preserving identity verification framework used for secure voter registration and authentication."},
-                {"label": "Concept", "name": "Threshold Decryption", "description": "A decryption method requiring multiple key holders to collaborate, ensuring no single authority can access vote content."},
-                {"label": "Concept", "name": "Zero-Trust Admin Architecture", "description": "A system design ensuring that administrators and key holders cannot view, modify, or link votes."},
-                {"label": "Concept", "name": "Voter Application", "description": "The client-side interface where voters register, obtain anonymous tokens, and submit encrypted votes."},
-                {"label": "Concept", "name": "Blockchain Network", "description": "The decentralized infrastructure providing an immutable ledger for vote hash storage and smart contract execution."},
-                {"label": "Concept", "name": "Smart Contracts", "description": "Self-executing protocols on the blockchain that enforce voting rules and verify Zero-Knowledge Proofs automatically."},
-                {"label": "Concept", "name": "IPFS", "description": "InterPlanetary File System used to store encrypted voting records in a secure, decentralized manner."},
-                {"label": "Concept", "name": "Election Committee", "description": "A distributed set of key holders responsible for executing threshold decryption once voting has concluded."},
-                {"label": "Keyword", "name": "Nullifier Hashes", "description": "Unique identifiers used to record that a vote has been cast, preventing duplicate voting without breaking anonymity."},
-                {"label": "Concept", "name": "Trustless Governance", "description": "A governance framework operating transparently without relying on the integrity of a central party."},
-                {"label": "Concept", "name": "Voter Anonymity", "description": "The complete separation of the voter's real identity from the cast ballot contents."}
+                {"label": "Method", "name": "Zero-Knowledge Proofs", "description": "Zero-Knowledge Proofs are cryptographic methods enabling verification of voter eligibility without disclosing voter identity. This prevents double voting while protecting voter privacy."},
+                {"label": "Method", "name": "Blind Signatures", "description": "Blind Signatures are cryptographic signature methods that validate the voting token without revealing the voter's choice. This prevents voter-vote linkage."},
+                {"label": "Method", "name": "Commit-Reveal Mechanism", "description": "Commit-Reveal Mechanism is a two-phase voting protocol (commit and reveal) to prevent vote tampering during the active voting phase. It prevents voters from changing their choices after seeing intermediate results."},
+                {"label": "Method", "name": "Decentralized Identity", "description": "Decentralized Identity is a privacy-preserving identity verification method used for secure voter registration. It allows voters to prove eligibility without centralized database lookup."},
+                {"label": "Method", "name": "Threshold Decryption", "description": "Threshold Decryption is a decryption method requiring multiple key holders to collaborate to access vote content. This ensures no single authority can decrypt and read individual votes before the election ends."},
+                {"label": "Concept", "name": "Zero-Trust Admin Architecture", "description": "Zero-Trust Admin Architecture is a system design ensuring that administrators and key holders cannot view, modify, or link votes. It operates under the assumption that any system actor could be compromised."},
+                {"label": "Concept", "name": "Voter Application", "description": "Voter Application is the client-side interface where voters register, obtain anonymous tokens, and submit encrypted votes."},
+                {"label": "Concept", "name": "Blockchain Network", "description": "Blockchain Network is the decentralized infrastructure providing an immutable ledger for vote hash storage and smart contract execution."},
+                {"label": "Method", "name": "Smart Contracts", "description": "Smart Contracts are self-executing protocols on the blockchain that enforce voting rules and verify Zero-Knowledge Proofs automatically without human intervention."},
+                {"label": "Framework", "name": "IPFS", "description": "IPFS is the InterPlanetary File System used to store encrypted voting records in a secure, decentralized, content-addressed manner."},
+                {"label": "Concept", "name": "Election Committee", "description": "Election Committee is a distributed set of key holders responsible for executing threshold decryption once voting has concluded."},
+                {"label": "Keyword", "name": "Nullifier Hashes", "description": "Nullifier Hashes are unique identifiers used to record that a vote has been cast. They prevent duplicate voting without breaking anonymity."},
+                {"label": "Concept", "name": "Trustless Governance", "description": "Trustless Governance is a governance framework operating transparently without relying on the integrity of any central party."},
+                {"label": "Concept", "name": "Voter Anonymity", "description": "Voter Anonymity is the complete cryptographic separation of the voter's real identity from the cast ballot contents."},
+                {"label": "Paper", "name": "Untraceable Electronic Mail and Digital Pseudonyms", "description": "Untraceable Electronic Mail and Digital Pseudonyms is David Chaum's pioneering 1981 paper. It laid the foundation for anonymous communication, mixes, and digital signature techniques.", "year": 1981, "doi": "10.1145/358549.358563"},
+                {"label": "Paper", "name": "A Cryptographic Voting Scheme", "description": "A Cryptographic Voting Scheme is a landmark academic paper describing anonymous voting using blind signatures and cryptographic verification mechanisms.", "year": 1988, "doi": "10.1007/3-540-45961-8_35"},
+                {"label": "Author", "name": "David Chaum", "description": "David Chaum is a world-renowned computer scientist and cryptographer. He is the inventor of blind signatures and digital cash, and a pioneer in privacy-enhancing technologies."}
             ]
             relationships = [
-                {"from": "Secure Online Voting System", "to": "Zero-Knowledge Proofs", "type": "USES_METHOD"},
-                {"from": "Secure Online Voting System", "to": "Blind Signatures", "type": "USES_METHOD"},
-                {"from": "Secure Online Voting System", "to": "Commit-Reveal Mechanism", "type": "USES_METHOD"},
-                {"from": "Secure Online Voting System", "to": "Decentralized Identity", "type": "USES_METHOD"},
-                {"from": "Secure Online Voting System", "to": "Threshold Decryption", "type": "USES_METHOD"},
-                {"from": "Secure Online Voting System", "to": "Zero-Trust Admin Architecture", "type": "USES_METHOD"},
+                {"from": "Secure Online Voting System", "to": "Zero-Knowledge Proofs", "type": "USES"},
+                {"from": "Secure Online Voting System", "to": "Blind Signatures", "type": "USES"},
+                {"from": "Secure Online Voting System", "to": "Commit-Reveal Mechanism", "type": "USES"},
+                {"from": "Secure Online Voting System", "to": "Decentralized Identity", "type": "USES"},
+                {"from": "Secure Online Voting System", "to": "Threshold Decryption", "type": "USES"},
+                {"from": "Secure Online Voting System", "to": "Zero-Trust Admin Architecture", "type": "USES"},
                 {"from": "Secure Online Voting System", "to": "Blockchain Network", "type": "DEPENDS_ON"},
                 {"from": "Secure Online Voting System", "to": "Voter Application", "type": "DEPENDS_ON"},
                 {"from": "Voter Application", "to": "Decentralized Identity", "type": "DEPENDS_ON"},
-                {"from": "Voter Application", "to": "Blind Signatures", "type": "USES_METHOD"},
-                {"from": "Blockchain Network", "to": "Smart Contracts", "type": "USES_METHOD"},
-                {"from": "Blockchain Network", "to": "IPFS", "type": "USES_METHOD"},
-                {"from": "Smart Contracts", "to": "Zero-Knowledge Proofs", "type": "USES_METHOD"},
-                {"from": "Smart Contracts", "to": "Nullifier Hashes", "type": "USES_METHOD"},
+                {"from": "Voter Application", "to": "Blind Signatures", "type": "USES"},
+                {"from": "Blockchain Network", "to": "Smart Contracts", "type": "USES"},
+                {"from": "Blockchain Network", "to": "IPFS", "type": "USES"},
+                {"from": "Smart Contracts", "to": "Zero-Knowledge Proofs", "type": "USES"},
+                {"from": "Smart Contracts", "to": "Nullifier Hashes", "type": "USES"},
                 {"from": "Zero-Knowledge Proofs", "to": "Nullifier Hashes", "type": "RELATED_TO"},
                 {"from": "Zero-Knowledge Proofs", "to": "Voter Anonymity", "type": "RELATED_TO"},
                 {"from": "Blind Signatures", "to": "Voter Anonymity", "type": "RELATED_TO"},
@@ -548,7 +595,11 @@ class LLMClient:
                 {"from": "Zero-Trust Admin Architecture", "to": "Trustless Governance", "type": "RELATED_TO"},
                 {"from": "Blockchain Network", "to": "Trustless Governance", "type": "RELATED_TO"},
                 {"from": "Voter Anonymity", "to": "Trustless Governance", "type": "RELATED_TO"},
-                {"from": "Nullifier Hashes", "to": "Voter Anonymity", "type": "RELATED_TO"}
+                {"from": "Nullifier Hashes", "to": "Voter Anonymity", "type": "RELATED_TO"},
+                {"from": "A Cryptographic Voting Scheme", "to": "David Chaum", "type": "AUTHORED_BY"},
+                {"from": "Untraceable Electronic Mail and Digital Pseudonyms", "to": "David Chaum", "type": "AUTHORED_BY"},
+                {"from": "A Cryptographic Voting Scheme", "to": "Untraceable Electronic Mail and Digital Pseudonyms", "type": "CITES"},
+                {"from": "Secure Online Voting System", "to": "A Cryptographic Voting Scheme", "type": "USES"}
             ]
             return {"nodes": nodes, "relationships": relationships}
 
@@ -598,6 +649,10 @@ class LLMClient:
                     label = "Concept"
                     if any(x in normalized_name for x in ["University", "Institute", "Research", "Lab", "Company", "Google", "Microsoft"]):
                         label = "Institution"
+                    elif any(x in normalized_name.lower() for x in ["dataset", "benchmark", "corpus", "data", "source", "wmt", "imagenet", "glue"]):
+                        label = "Dataset"
+                    elif any(x in normalized_name.lower() for x in ["method", "algorithm", "model", "approach", "architecture", "framework", "network", "function", "optimizer"]):
+                        label = "Method"
                     elif normalized_name.startswith("Chapter") or normalized_name.startswith("Section"):
                         label = "Topic"
                     elif len(normalized_name.split()) == 1 and len(normalized_name) > 3:
@@ -684,12 +739,36 @@ class LLMClient:
                         elif "contradicts" in between_text or "opposes" in between_text or "in contrast to" in between_text:
                             relationships.append({"from": c1, "to": c2, "type": "CONTRADICTS"})
                         elif "uses" in between_text or "utilizes" in between_text or "employs" in between_text:
-                            if c1_pos < c2_pos:
-                                relationships.append({"from": c2, "to": c1, "type": "USES_METHOD"})
+                            if c1_node["label"] == "Method" and c2_node["label"] == "Dataset":
+                                relationships.append({"from": c1, "to": c2, "type": "EVALUATED_ON"})
+                            elif c2_node["label"] == "Method" and c1_node["label"] == "Dataset":
+                                relationships.append({"from": c2, "to": c1, "type": "EVALUATED_ON"})
+                            elif c1_node["label"] == "Dataset" or c2_node["label"] == "Dataset":
+                                if c1_node["label"] == "Dataset":
+                                    relationships.append({"from": c2, "to": c1, "type": "USES"})
+                                else:
+                                    relationships.append({"from": c1, "to": c2, "type": "USES"})
                             else:
-                                relationships.append({"from": c1, "to": c2, "type": "USES_METHOD"})
+                                if c1_pos < c2_pos:
+                                    relationships.append({"from": c2, "to": c1, "type": "USES"})
+                                else:
+                                    relationships.append({"from": c1, "to": c2, "type": "USES"})
+                        elif "evaluated" in between_text or "tested" in between_text or "benchmark" in between_text:
+                            if c1_node["label"] == "Dataset":
+                                relationships.append({"from": c2, "to": c1, "type": "EVALUATED_ON"})
+                            elif c2_node["label"] == "Dataset":
+                                relationships.append({"from": c1, "to": c2, "type": "EVALUATED_ON"})
+                            else:
+                                relationships.append({"from": c1, "to": c2, "type": "RELATED_TO"})
                         else:
-                            relationships.append({"from": c1, "to": c2, "type": "RELATED_TO"})
+                            if c1_node["label"] == "Method" and c2_node["label"] == "Dataset":
+                                relationships.append({"from": c1, "to": c2, "type": "EVALUATED_ON"})
+                            elif c2_node["label"] == "Method" and c1_node["label"] == "Dataset":
+                                relationships.append({"from": c2, "to": c1, "type": "EVALUATED_ON"})
+                            elif c1_node["label"] == "Method" and c2_node["label"] == "Method":
+                                relationships.append({"from": c1, "to": c2, "type": "USES"})
+                            else:
+                                relationships.append({"from": c1, "to": c2, "type": "RELATED_TO"})
                             
         # Ensure all extracted concepts in the chunk are connected in a chain or tree
         if len(sorted_concepts) > 1:

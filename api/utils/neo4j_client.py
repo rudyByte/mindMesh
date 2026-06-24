@@ -259,6 +259,10 @@ class Neo4jClient:
                 label = "Topic"
             elif ":INSTITUTION" in query_upper:
                 label = "Institution"
+            elif ":METHOD" in query_upper:
+                label = "Method"
+            elif ":DATASET" in query_upper:
+                label = "Dataset"
             
             name = params.get("name") or params.get("title") or "Node"
             node_id = params.get("id") or f"mock-n-{len(self.mock_nodes) + 1}"
@@ -274,7 +278,7 @@ class Neo4jClient:
                 for nid, mn in self.mock_nodes.items():
                     mn_label = mn.get("label", "Concept")
                     is_concept_like = (
-                        (label in ["Concept", "Topic", "Keyword", "Author"] and mn_label in ["Concept", "Topic", "Keyword", "Author"])
+                        (label in ["Concept", "Topic", "Keyword", "Author", "Method", "Dataset"] and mn_label in ["Concept", "Topic", "Keyword", "Author", "Method", "Dataset"])
                         or label == mn_label
                     )
                     if is_concept_like:
@@ -351,10 +355,10 @@ class Neo4jClient:
 
             # Check if it's querying for a list of concepts (for concept-linking)
             if "CONCEPT" in query_upper and "RETURN" in query_upper and "CONTAINS" not in query_upper:
-                return [{"id": node["id"], "name": node["name"]} for node in self.mock_nodes.values() if node.get("label") in ["Concept", "Topic", "Keyword", "Author"]]
+                return [{"id": node["id"], "name": node["name"]} for node in self.mock_nodes.values() if node.get("label") in ["Topic", "Subtopic", "Concept", "Technology", "Framework", "Application", "Paper", "Author", "Keyword"]]
 
             # Expand graph paths (Sprint 2 expand / traverse)
-            if "PREREQUISITE_OF" in query_upper or "RELATED_TO" in query_upper or "EXTENDS" in query_upper or "PATH" in query_upper:
+            if any(term in query_upper for term in ["PREREQUISITE_OF", "RELATED_TO", "EXTENDS", "DEPENDS_ON", "USES", "CITES", "CONTAINS", "PATH"]):
                 target_id = params.get("id") or params.get("node_id")
                 depth = params.get("depth", 1)
                 mode = params.get("mode", "basic")
@@ -389,7 +393,8 @@ class Neo4jClient:
                     nodes_to_return[target_id] = self.mock_nodes[target_id]
                 
                 for edge in self.mock_edges:
-                    if edge["type"] == "CONTAINS":
+                    # Keep Concept-to-Concept CONTAINS relationships, but drop Document-to-Concept ones
+                    if edge["type"] == "CONTAINS" and (edge["from"] == doc_id or edge["from"] == "doc-1" or (edge["from"] in self.mock_nodes and self.mock_nodes[edge["from"]].get("label") == "Document")):
                         continue
                     if mode == "basic" and edge["type"] != "PREREQUISITE_OF":
                         continue

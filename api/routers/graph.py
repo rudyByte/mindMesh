@@ -9,7 +9,7 @@ def get_primary_label(labels_list) -> str:
         return "Concept"
     if isinstance(labels_list, str):
         labels_list = [labels_list]
-    for lbl in ["Topic", "Keyword", "Paper", "Author", "Institution"]:
+    for lbl in ["Topic", "Subtopic", "Technology", "Framework", "Application", "Concept", "Paper", "Author", "Institution", "Keyword", "Method", "Dataset"]:
         if lbl in labels_list:
             return lbl
     return "Concept"
@@ -156,7 +156,7 @@ def expand_graph(
             """
         else:
             cypher = """
-            MATCH p=(target {id: $id, session_id: $session_id})-[:EXTENDS|RELATED_TO*1..$depth]-(n)
+            MATCH p=(target {id: $id, session_id: $session_id})-[:EXTENDS|RELATED_TO|USES|CITES|CONTAINS|PREREQUISITE_OF|USES_METHOD|DEPENDS_ON|AUTHORED_BY|MENTIONS|HAS_KEYWORD*1..$depth]-(n)
             WHERE ALL(x IN nodes(p) WHERE x.session_id = $session_id) AND ALL(r IN relationships(p) WHERE r.session_id = $session_id)
             RETURN p
             """
@@ -171,7 +171,7 @@ def expand_graph(
         else:
             cypher = """
             MATCH (d:Document {id: $doc_id})
-            MATCH p=(target {id: $id})-[:EXTENDS|RELATED_TO*1..$depth]-(n)
+            MATCH p=(target {id: $id})-[:EXTENDS|RELATED_TO|USES|CITES|CONTAINS|PREREQUISITE_OF|USES_METHOD|DEPENDS_ON|AUTHORED_BY|MENTIONS|HAS_KEYWORD*1..$depth]-(n)
             WHERE ALL(x IN nodes(p) WHERE (d)-[:CONTAINS]->(x)) AND ALL(r IN relationships(p) WHERE r.doc_id = $doc_id)
             RETURN p
             """
