@@ -46,24 +46,35 @@ def format_citation_template(title: str, authors: list, year: int, doi_url: str,
 
 @router.post("/citations")
 def create_citation(request: CitationCreate, session_id: str = Query(...)):
-    # Fetch Paper details
+    # Fetch Paper details, validating session ownership
     query = """
-    MATCH (p:Paper {id: $paper_id})
+    MATCH (p:Paper {id: $paper_id, session_id: $session_id})
     OPTIONAL MATCH (p)-[:AUTHORED_BY]->(a:Author)
     RETURN coalesce(p.title, p.name) as title, p.year as year, p.doi as doi, collect(a.name) as authors
     """
-    res = neo4j_client.run_query(query, {"paper_id": request.paper_id})
+    res = neo4j_client.run_query(query, {"paper_id": request.paper_id, "session_id": session_id})
     
     if not res:
         # In mock mode, check the mock node
-        if neo4j_client.is_mock() and request.paper_id in neo4j_client.mock_nodes:
-            paper = neo4j_client.mock_nodes[request.paper_id]
-            title = paper.get("title") or paper.get("name") or "Sample Research Paper"
-            authors = ["Rudy, B."]
-            year = paper.get("year", 2026)
-            doi = paper.get("doi", "10.1234/mock.doi")
+        if neo4j_client.is_mock():
+            if request.paper_id in neo4j_client.mock_nodes:
+                paper = neo4j_client.mock_nodes[request.paper_id]
+                if paper.get("session_id") != session_id:
+                    raise HTTPException(status_code=403, detail="Access denied. Paper does not belong to this session.")
+                title = paper.get("title") or paper.get("name") or "Sample Research Paper"
+                authors = ["Rudy, B."]
+                year = paper.get("year", 2026)
+                doi = paper.get("doi", "10.1234/mock.doi")
+            else:
+                raise HTTPException(status_code=404, detail="Paper not found.")
         else:
-            raise HTTPException(status_code=404, detail="Paper not found.")
+            # Check if paper exists globally to throw 403 vs 404
+            exists_query = "MATCH (p:Paper {id: $paper_id}) RETURN p.id"
+            exists_res = neo4j_client.run_query(exists_query, {"paper_id": request.paper_id})
+            if exists_res:
+                raise HTTPException(status_code=403, detail="Access denied. Paper does not belong to this session.")
+            else:
+                raise HTTPException(status_code=404, detail="Paper not found.")
     else:
         record = res[0]
         title = record["title"] or "Untitled Paper"

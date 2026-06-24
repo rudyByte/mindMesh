@@ -623,21 +623,24 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             else:
                 if session_id:
                     query = f"""
-                    MERGE (n:{label} {{name: $name, session_id: $session_id}})
+                    MERGE (n:Concept {{name: $name, session_id: $session_id}})
+                    SET n:{label}
                     ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id
                     ON MATCH SET n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END
                     RETURN n.id as node_id
                     """
                 elif multi_doc_mode:
                     query = f"""
-                    MERGE (n:{label} {{name: $name}})
+                    MERGE (n:Concept {{name: $name}})
+                    SET n:{label}
                     ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id
                     ON MATCH SET n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END
                     RETURN n.id as node_id
                     """
                 else:
                     query = f"""
-                    MERGE (n:{label} {{name: $name, doc_id: $doc_id}})
+                    MERGE (n:Concept {{name: $name, doc_id: $doc_id}})
+                    SET n:{label}
                     ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner'
                     ON MATCH SET n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END
                     RETURN n.id as node_id
@@ -659,10 +662,10 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 resolved_id = res[0]["node_id"]
             node["resolved_id"] = resolved_id
             
-            # Link node to Document
+            # Link node to Document (using label-agnostic MATCH to avoid mismatch)
             link_query = f"""
             MATCH (d:Document {{id: $doc_id}})
-            MATCH (n:{label} {{id: $node_id}})
+            MATCH (n {{id: $node_id}})
             MERGE (d)-[:CONTAINS]->(n)
             """
             neo4j_client.run_query(link_query, {"doc_id": doc_id, "node_id": resolved_id})
@@ -671,7 +674,12 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             if neo4j_client.is_mock():
                 existing_id = None
                 for nid, mn in neo4j_client.mock_nodes.items():
-                    if mn.get("label") == label and mn.get("name", "").lower() == name.lower():
+                    mn_label = mn.get("label", "Concept")
+                    is_label_match = (
+                        (label in ["Concept", "Topic", "Keyword", "Author"] and mn_label in ["Concept", "Topic", "Keyword", "Author"])
+                        or label == mn_label
+                    )
+                    if is_label_match and mn.get("name", "").lower() == name.lower():
                         if mn.get("session_id") == session_id:
                             existing_id = nid
                             break
@@ -763,6 +771,25 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         logger.error(f"Extraction failed for document {doc_id}: {e}")
         error_msg = str(e)
         extraction_status_cache[doc_id] = {"status": "error", "progress_pct": 100, "error": error_msg}
+        
+        # Clean up any partial nodes or relationships created during this failed run to prevent contamination
+        try:
+            if neo4j_client.is_mock():
+                nodes_to_delete = {nid for nid, n in neo4j_client.mock_nodes.items() if n.get("doc_id") == doc_id}
+                for nid in nodes_to_delete:
+                    neo4j_client.mock_nodes.pop(nid, None)
+                neo4j_client.mock_edges = [
+                    e for e in neo4j_client.mock_edges 
+                    if e.get("doc_id") != doc_id
+                ]
+            else:
+                neo4j_client.run_query(
+                    "MATCH (n) WHERE n.doc_id = $doc_id DETACH DELETE n",
+                    {"doc_id": doc_id}
+                )
+        except Exception as cleanup_err:
+            logger.error(f"Failed to clean up contaminated nodes/edges for failed doc {doc_id}: {cleanup_err}")
+
         neo4j_client.run_query(
             "MATCH (d:Document {id: $doc_id}) SET d.status = 'error', d.error_msg = $error",
             {"doc_id": doc_id, "error": error_msg}
@@ -849,7 +876,19 @@ async def upload_document(
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @router.get("/documents/{id}/status", response_model=StatusResponse)
-def get_document_status(id: str):
+def get_document_status(id: str, session_id: Optional[str] = Query(None)):
+    # Validate session ownership if session_id is provided
+    if session_id:
+        if neo4j_client.is_mock():
+            doc = neo4j_client.mock_nodes.get(id)
+            if doc and doc.get("session_id") != session_id:
+                raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
+        else:
+            query = "MATCH (d:Document {id: $id}) RETURN d.session_id as session_id"
+            res = neo4j_client.run_query(query, {"id": id})
+            if res and res[0].get("session_id") != session_id:
+                raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
+
     # Check cache first
     status = extraction_status_cache.get(id)
     if status:
@@ -869,7 +908,19 @@ def get_document_status(id: str):
     raise HTTPException(status_code=404, detail="Document not found.")
 
 @router.get("/documents/{id}/graph")
-def get_document_graph(id: str):
+def get_document_graph(id: str, session_id: Optional[str] = Query(None)):
+    # Validate session ownership if session_id is provided
+    if session_id:
+        if neo4j_client.is_mock():
+            doc = neo4j_client.mock_nodes.get(id)
+            if doc and doc.get("session_id") != session_id:
+                raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
+        else:
+            query = "MATCH (d:Document {id: $id}) RETURN d.session_id as session_id"
+            res = neo4j_client.run_query(query, {"id": id})
+            if res and res[0].get("session_id") != session_id:
+                raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
+
     from api.config import config
     multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False)
 
@@ -1034,7 +1085,19 @@ def get_session_graph(session_id: str):
     return {"nodes": nodes, "edges": edges}
 
 @router.get("/documents/{id}/text")
-def get_document_text(id: str):
+def get_document_text(id: str, session_id: Optional[str] = Query(None)):
+    # Validate session ownership if session_id is provided
+    if session_id:
+        if neo4j_client.is_mock():
+            doc = neo4j_client.mock_nodes.get(id)
+            if doc and doc.get("session_id") != session_id:
+                raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
+        else:
+            query = "MATCH (d:Document {id: $id}) RETURN d.session_id as session_id"
+            res = neo4j_client.run_query(query, {"id": id})
+            if res and res[0].get("session_id") != session_id:
+                raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
+
     query = "MATCH (d:Document {id: $id}) RETURN d.title as title, d.storage_url as url"
     res = neo4j_client.run_query(query, {"id": id})
     if not res:
@@ -1098,4 +1161,90 @@ def delete_session_data(session_id: str):
         )
 
     return {"status": "success", "message": f"Deleted session {session_id} data successfully."}
+
+@router.get("/sessions/{session_id}/documents")
+def get_session_documents(session_id: str):
+    if neo4j_client.is_mock():
+        docs = []
+        for n in neo4j_client.mock_nodes.values():
+            if n.get("label") == "Document" and n.get("session_id") == session_id:
+                docs.append({
+                    "id": n["id"],
+                    "title": n.get("title", "Document"),
+                    "status": n.get("status", "done"),
+                    "progress_pct": n.get("progress_pct", 100)
+                })
+        return docs
+
+    # Real Neo4j Mode
+    query = """
+    MATCH (d:Document {session_id: $session_id})
+    RETURN d.id as id, d.title as title, d.status as status, d.progress_pct as progress_pct
+    """
+    res = neo4j_client.run_query(query, {"session_id": session_id})
+    return [
+        {
+            "id": r["id"],
+            "title": r["title"] or "Untitled Document",
+            "status": r["status"] or "done",
+            "progress_pct": r["progress_pct"] or 100
+        }
+        for r in res
+    ]
+
+@router.delete("/documents/{doc_id}")
+def delete_document(doc_id: str, session_id: Optional[str] = Query(None)):
+    import os
+    import re
+    # Fetch Document storage URL
+    if neo4j_client.is_mock():
+        doc = neo4j_client.mock_nodes.get(doc_id)
+        if not doc or doc.get("label") != "Document":
+            raise HTTPException(status_code=404, detail="Document not found.")
+        if session_id and doc.get("session_id") != session_id:
+            raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
+        url = doc.get("storage_url", "")
+    else:
+        query = "MATCH (d:Document {id: $doc_id}) RETURN d.storage_url as url, d.session_id as session_id"
+        res = neo4j_client.run_query(query, {"doc_id": doc_id})
+        if not res:
+            raise HTTPException(status_code=404, detail="Document not found.")
+        record = res[0]
+        if session_id and record.get("session_id") != session_id:
+            raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
+        url = record.get("url") or record.get("storage_url") or ""
+
+    # Delete storage file
+    if url:
+        if url.startswith("file:///"):
+            filename = os.path.basename(url)
+            supabase_client.delete_file("documents", filename)
+        else:
+            match = re.search(r'documents/(uploads/.*)', url)
+            if match:
+                path = match.group(1)
+                supabase_client.delete_file("documents", path)
+
+    # Delete nodes & edges
+    if neo4j_client.is_mock():
+        # Pop doc node
+        neo4j_client.mock_nodes.pop(doc_id, None)
+        # Pop nodes tagged with doc_id
+        nodes_to_delete = {nid for nid, n in neo4j_client.mock_nodes.items() if n.get("doc_id") == doc_id}
+        for nid in nodes_to_delete:
+            neo4j_client.mock_nodes.pop(nid, None)
+        # Pop edges tagged with doc_id
+        neo4j_client.mock_edges = [
+            e for e in neo4j_client.mock_edges 
+            if e.get("doc_id") != doc_id and e["from"] != doc_id and e["to"] != doc_id
+        ]
+        # Pop from status cache
+        extraction_status_cache.pop(doc_id, None)
+    else:
+        # Delete doc and its nodes/edges from Neo4j
+        neo4j_client.run_query("MATCH (n) WHERE n.doc_id = $doc_id DETACH DELETE n", {"doc_id": doc_id})
+        neo4j_client.run_query("MATCH (d:Document {id: $doc_id}) DETACH DELETE d", {"doc_id": doc_id})
+        extraction_status_cache.pop(doc_id, None)
+
+    return {"status": "success", "message": f"Document {doc_id} deleted successfully."}
 

@@ -762,7 +762,11 @@ export function RightSidebar() {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ node_id: selectedNode.id }),
+          body: JSON.stringify({
+            node_id: selectedNode.id,
+            session_id: sessionId,
+            document_id: activeDocumentId || 'doc-1'
+          }),
         });
         if (response.ok) {
           const data = await response.json();
@@ -779,7 +783,7 @@ export function RightSidebar() {
     };
 
     fetchContext();
-  }, [selectedNode]);
+  }, [selectedNode, sessionId, activeDocumentId]);
 
   const handleSendMessage = async (text: string) => {
     if (!text.trim()) return;
@@ -803,7 +807,9 @@ export function RightSidebar() {
           message: text,
           node_id: selectedNode?.id || null,
           conversation_history: chatMessages.slice(-10).map(m => ({ role: m.role, content: m.content })),
-          user_role: user?.role || 'student'
+          user_role: user?.role || 'student',
+          session_id: sessionId,
+          document_id: activeDocumentId || 'doc-1'
         }),
       });
 

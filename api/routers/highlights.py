@@ -118,6 +118,17 @@ def run_concept_linking_for_highlight(highlight_id: str, text: str, doc_id: str,
 
 @router.post("/highlights")
 def create_highlight(request: HighlightCreate, session_id: str = Query(...)):
+    # Validate that the source document belongs to the active session
+    if neo4j_client.is_mock():
+        doc = neo4j_client.mock_nodes.get(request.source_document_id)
+        if not doc or doc.get("session_id") != session_id:
+            raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
+    else:
+        check_query = "MATCH (d:Document {id: $doc_id, session_id: $session_id}) RETURN d"
+        check_res = neo4j_client.run_query(check_query, {"doc_id": request.source_document_id, "session_id": session_id})
+        if not check_res:
+            raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
+
     hid = str(uuid.uuid4())
     created_at = datetime.datetime.now().isoformat()
     
@@ -137,11 +148,11 @@ def create_highlight(request: HighlightCreate, session_id: str = Query(...)):
     
     # Link to Document
     doc_link_query = """
-    MATCH (h:Highlight {id: $hid})
-    MATCH (d:Document {id: $doc_id})
+    MATCH (h:Highlight {id: $hid, session_id: $session_id})
+    MATCH (d:Document {id: $doc_id, session_id: $session_id})
     MERGE (h)-[:EXTRACTED_FROM]->(d)
     """
-    neo4j_client.run_query(doc_link_query, {"hid": hid, "doc_id": request.source_document_id})
+    neo4j_client.run_query(doc_link_query, {"hid": hid, "doc_id": request.source_document_id, "session_id": session_id})
     
     # Mock data write
     if neo4j_client.is_mock():

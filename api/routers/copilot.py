@@ -16,6 +16,8 @@ logger = logging.getLogger("copilot_router")
 
 class ContextRequest(BaseModel):
     node_id: str
+    session_id: Optional[str] = None
+    document_id: Optional[str] = None
 
 class ChatMessageSchema(BaseModel):
     role: str # 'user' or 'assistant'
@@ -26,19 +28,61 @@ class ChatRequest(BaseModel):
     node_id: Optional[str] = None
     conversation_history: List[ChatMessageSchema] = []
     user_role: Optional[str] = "student" # 'student' or 'researcher'
+    session_id: Optional[str] = None
+    document_id: Optional[str] = None
 
-def get_node_graphrag_context(node_id: str) -> dict:
+def get_node_graphrag_context(node_id: str, session_id: Optional[str] = None, document_id: Optional[str] = None) -> dict:
     if neo4j_client.is_mock():
-        # Fallback context in mock mode
+        # Validate focus node ownership in mock mode
         node = neo4j_client.mock_nodes.get(node_id)
         if not node:
             return {"node": None, "prerequisites": [], "related": [], "papers": []}
-            
+        
+        # Verify ownership
+        if session_id and node.get("session_id") != session_id:
+            raise HTTPException(status_code=403, detail="Access denied. Node does not belong to the specified session.")
+        elif document_id and document_id != "doc-1":
+            has_contains = any(
+                e["from"] == document_id and e["to"] == node_id and e["type"] == "CONTAINS"
+                for e in neo4j_client.mock_edges
+            )
+            if not has_contains and node.get("doc_id") != document_id:
+                raise HTTPException(status_code=403, detail="Access denied. Node does not belong to the specified document.")
+
         prereqs = []
         related = []
         papers = []
         
+        # Build allowed nodes list for mock isolation
+        allowed_node_ids = set()
+        if session_id:
+            for nid, n in neo4j_client.mock_nodes.items():
+                if n.get("session_id") == session_id:
+                    allowed_node_ids.add(nid)
+        elif document_id:
+            if document_id == "doc-1":
+                allowed_node_ids = set(neo4j_client.mock_nodes.keys())
+            else:
+                for edge in neo4j_client.mock_edges:
+                    if edge["from"] == document_id and edge["type"] == "CONTAINS":
+                        allowed_node_ids.add(edge["to"])
+                for nid, n in neo4j_client.mock_nodes.items():
+                    if n.get("doc_id") == document_id:
+                        allowed_node_ids.add(nid)
+
         for edge in neo4j_client.mock_edges:
+            if edge["type"] == "CONTAINS":
+                continue
+            
+            # Strict edge-level session/doc isolation
+            if session_id and edge.get("session_id") != session_id:
+                continue
+            if document_id and document_id != "doc-1" and edge.get("doc_id") != document_id:
+                continue
+                
+            if edge["from"] not in allowed_node_ids or edge["to"] not in allowed_node_ids:
+                continue
+
             if edge["to"] == node_id and edge["type"] == "PREREQUISITE_OF":
                 from_node = neo4j_client.mock_nodes.get(edge["from"])
                 if from_node:
@@ -66,19 +110,48 @@ def get_node_graphrag_context(node_id: str) -> dict:
             "papers": papers[:10]
         }
 
-    # Real Neo4j context builder
-    query = """
-    MATCH (n {id: $node_id})
-    OPTIONAL MATCH (n)-[r]-(m)
-    RETURN labels(n)[0] as label, n.id as id, n.name as name, n.description as description, n.difficulty_level as difficulty,
-           n.title as title, labels(m)[0] as m_label, m.id as m_id, m.name as m_name, m.title as m_title, type(r) as rel_type, startNode(r).id = n.id as is_outgoing
-    """
-    res = neo4j_client.run_query(query, {"node_id": node_id})
-    
-    if not res:
-        return {"node": None, "prerequisites": [], "related": [], "papers": []}
+    # Real Neo4j Mode
+    # 1. Validate target node exists globally and check ownership
+    exists_query = "MATCH (n {id: $node_id}) RETURN labels(n)[0] as label"
+    exists_res = neo4j_client.run_query(exists_query, {"node_id": node_id})
+    if not exists_res:
+        raise HTTPException(status_code=404, detail="Node not found.")
+
+    if session_id:
+        target_check = "MATCH (target {id: $id, session_id: $session_id}) RETURN target.id"
+        target_res = neo4j_client.run_query(target_check, {"id": node_id, "session_id": session_id})
+    else:
+        target_check = "MATCH (d:Document {id: $doc_id})-[:CONTAINS]->(target {id: $id}) RETURN target.id"
+        target_res = neo4j_client.run_query(target_check, {"id": node_id, "doc_id": document_id})
+
+    if not target_res:
+        raise HTTPException(status_code=403, detail="Access denied. Node does not belong to the specified session or document.")
+
+    # 2. Query context details with strict isolation of neighbors and relations
+    if session_id:
+        query = """
+        MATCH (n {id: $node_id, session_id: $session_id})
+        OPTIONAL MATCH (n)-[r]-(m)
+        WHERE r.session_id = $session_id AND m.session_id = $session_id
+        RETURN labels(n)[0] as label, n.id as id, n.name as name, n.description as description, n.difficulty_level as difficulty,
+               n.title as title, labels(m)[0] as m_label, m.id as m_id, m.name as m_name, m.title as m_title, type(r) as rel_type, startNode(r).id = n.id as is_outgoing
+        """
+        res = neo4j_client.run_query(query, {"node_id": node_id, "session_id": session_id})
+    else:
+        query = """
+        MATCH (d:Document {id: $doc_id})
+        MATCH (n {id: $node_id})
+        WHERE (d)-[:CONTAINS]->(n)
+        OPTIONAL MATCH (n)-[r]-(m)
+        WHERE (d)-[:CONTAINS]->(m) AND r.doc_id = $doc_id
+        RETURN labels(n)[0] as label, n.id as id, n.name as name, n.description as description, n.difficulty_level as difficulty,
+               n.title as title, labels(m)[0] as m_label, m.id as m_id, m.name as m_name, m.title as m_title, type(r) as rel_type, startNode(r).id = n.id as is_outgoing
+        """
+        res = neo4j_client.run_query(query, {"node_id": node_id, "doc_id": document_id})
         
-    # Unpack records
+    if not res:
+        return {"node": {"id": node_id, "label": exists_res[0]["label"], "name": "Node", "description": "", "difficulty_level": "Beginner"}, "prerequisites": [], "related": [], "papers": []}
+        
     first = res[0]
     node_name = first.get("name") or first.get("title") or "Unknown"
     node_details = {
@@ -110,7 +183,6 @@ def get_node_graphrag_context(node_id: str) -> dict:
         if m_label == "Paper":
             papers.append(item)
         elif rel_type == "PREREQUISITE_OF" and not is_outgoing:
-            # incoming prerequisite -> it is a prereq of the current node
             prereqs.append(item)
         else:
             related.append(item)
@@ -124,7 +196,7 @@ def get_node_graphrag_context(node_id: str) -> dict:
 
 @router.post("/copilot/context")
 def get_copilot_context(request: ContextRequest):
-    context = get_node_graphrag_context(request.node_id)
+    context = get_node_graphrag_context(request.node_id, request.session_id, request.document_id)
     if not context.get("node"):
         raise HTTPException(status_code=404, detail="Node not found.")
     return context
@@ -229,10 +301,10 @@ async def generate_live_stream(message: str, context: dict, history: list, user_
 
 @router.post("/copilot/chat")
 async def chat_copilot(request: ChatRequest):
-    # Fetch focus node context
+    # Fetch focus node context with isolation parameters
     context = {}
     if request.node_id:
-        context = get_node_graphrag_context(request.node_id)
+        context = get_node_graphrag_context(request.node_id, request.session_id, request.document_id)
         
     is_mock = not config.ANTHROPIC_API_KEY or "mock-api-key" in config.ANTHROPIC_API_KEY
     

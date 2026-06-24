@@ -263,20 +263,61 @@ class Neo4jClient:
             name = params.get("name") or params.get("title") or "Node"
             node_id = params.get("id") or f"mock-n-{len(self.mock_nodes) + 1}"
             
-            node_data = {
-                "id": node_id,
-                "label": label,
-                "name": name,
-                "title": name,
-                "description": params.get("description", ""),
-                "difficulty_level": params.get("difficulty_level", "Beginner")
-            }
-            # Copy all additional fields from params to mock data
-            for k, v in params.items():
-                if k not in node_data:
-                    node_data[k] = v
-                    
-            self.mock_nodes[node_id] = node_data
+            existing_id = None
+            if "MERGE" in query_upper:
+                # Look for existing node with matching name/title and session_id / doc_id
+                name_val = name.strip().lower()
+                sess_val = params.get("session_id")
+                d_val = params.get("doc_id")
+                id_val = params.get("id")
+                
+                for nid, mn in self.mock_nodes.items():
+                    mn_label = mn.get("label", "Concept")
+                    is_concept_like = (
+                        (label in ["Concept", "Topic", "Keyword", "Author"] and mn_label in ["Concept", "Topic", "Keyword", "Author"])
+                        or label == mn_label
+                    )
+                    if is_concept_like:
+                        mn_name = (mn.get("name") or mn.get("title") or "").strip().lower()
+                        if mn_name == name_val:
+                            # Match session or doc
+                            session_match = True
+                            if sess_val is not None or mn.get("session_id") is not None:
+                                session_match = (mn.get("session_id") == sess_val)
+                            
+                            doc_match = True
+                            if d_val is not None or mn.get("doc_id") is not None:
+                                doc_match = (mn.get("doc_id") == d_val)
+                                
+                            if session_match and doc_match:
+                                existing_id = nid
+                                break
+                    elif id_val and mn.get("id") == id_val:
+                        existing_id = nid
+                        break
+
+            if existing_id:
+                node_id = existing_id
+                # Update attributes on existing node
+                for k, v in params.items():
+                    if k not in ["id", "label"]:
+                        self.mock_nodes[node_id][k] = v
+            else:
+                node_data = {
+                    "id": node_id,
+                    "label": label,
+                    "name": name,
+                    "title": name,
+                    "description": params.get("description", ""),
+                    "difficulty_level": params.get("difficulty_level", "Beginner")
+                }
+                # Copy all additional fields from params to mock data
+                for k, v in params.items():
+                    if k not in node_data:
+                        node_data[k] = v
+                        
+                self.mock_nodes[node_id] = node_data
+                
             return [{"node_id": node_id, "n": self.mock_nodes[node_id]}]
 
         # 3.1 Relationship insertion
@@ -310,7 +351,7 @@ class Neo4jClient:
 
             # Check if it's querying for a list of concepts (for concept-linking)
             if "CONCEPT" in query_upper and "RETURN" in query_upper and "CONTAINS" not in query_upper:
-                return [{"id": node["id"], "name": node["name"]} for node in self.mock_nodes.values() if node.get("label") == "Concept"]
+                return [{"id": node["id"], "name": node["name"]} for node in self.mock_nodes.values() if node.get("label") in ["Concept", "Topic", "Keyword", "Author"]]
 
             # Expand graph paths (Sprint 2 expand / traverse)
             if "PREREQUISITE_OF" in query_upper or "RELATED_TO" in query_upper or "EXTENDS" in query_upper or "PATH" in query_upper:

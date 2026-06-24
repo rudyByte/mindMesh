@@ -129,7 +129,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
 
     intervalRef.current = setInterval(async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/documents/${docId}/status`);
+        const response = await fetch(`${API_BASE_URL}/documents/${docId}/status?session_id=${sessionId}`);
         if (!response.ok) {
           throw new Error(`Failed to get status (HTTP ${response.status})`);
         }

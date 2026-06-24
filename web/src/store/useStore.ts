@@ -404,6 +404,18 @@ export const useStore = create<AppState>((set) => ({
   reloadSessionData: async (id) => {
     if (!id) return;
     try {
+      // 0. Fetch documents list from backend
+      try {
+        const docsRes = await fetch(`${API_BASE_URL}/sessions/${id}/documents`);
+        if (docsRes.ok) {
+          const docsData = await docsRes.json();
+          set({ documents: docsData || [] });
+          saveSessionLocal(id, { documents: docsData || [] });
+        }
+      } catch (docsErr) {
+        console.error('Failed to reload session documents:', docsErr);
+      }
+
       // 1. Fetch graph
       const graphRes = await fetch(`${API_BASE_URL}/sessions/${id}/graph`);
       if (graphRes.ok) {

@@ -4,6 +4,16 @@ from utils.neo4j_client import neo4j_client
 
 router = APIRouter()
 
+def get_primary_label(labels_list) -> str:
+    if not labels_list:
+        return "Concept"
+    if isinstance(labels_list, str):
+        labels_list = [labels_list]
+    for lbl in ["Topic", "Keyword", "Paper", "Author", "Institution"]:
+        if lbl in labels_list:
+            return lbl
+    return "Concept"
+
 @router.get("/graph/node/{id}")
 def get_node_details(
     id: str, 
@@ -14,9 +24,10 @@ def get_node_details(
         res = neo4j_client.run_query("MATCH (N {ID: $id})", {"id": id, "document_id": document_id, "session_id": session_id})
         if res:
             record = res[0]
+            label = get_primary_label(record.get("label"))
             return {
                 "id": record.get("id"),
-                "label": record.get("label"),
+                "label": label,
                 "name": record.get("name") or record.get("title") or "Unknown",
                 "description": record.get("description") or "",
                 "difficulty_level": record.get("difficulty_level") or "Beginner",
@@ -35,14 +46,14 @@ def get_node_details(
     if session_id:
         query = """
         MATCH (n {id: $id, session_id: $session_id}) 
-        RETURN labels(n)[0] as label, n.id as id, n.name as name, n.description as description, 
+        RETURN labels(n) as labels, n.id as id, n.name as name, n.description as description, 
                n.difficulty_level as difficulty_level, n.title as title, n.year as year, n.doi as doi
         """
         res = neo4j_client.run_query(query, {"id": id, "session_id": session_id})
     else:
         query = """
         MATCH (d:Document {id: $doc_id})-[:CONTAINS]->(n {id: $id}) 
-        RETURN labels(n)[0] as label, n.id as id, n.name as name, n.description as description, 
+        RETURN labels(n) as labels, n.id as id, n.name as name, n.description as description, 
                n.difficulty_level as difficulty_level, n.title as title, n.year as year, n.doi as doi
         """
         res = neo4j_client.run_query(query, {"id": id, "doc_id": document_id})
@@ -60,10 +71,11 @@ def get_node_details(
             raise HTTPException(status_code=404, detail="Node not found.")
             
     record = res[0]
+    label = get_primary_label(record.get("labels"))
     name = record.get("name") or record.get("title") or "Unknown"
     return {
         "id": record.get("id"),
-        "label": record.get("label"),
+        "label": label,
         "name": name,
         "description": record.get("description") or "",
         "difficulty_level": record.get("difficulty_level") or "Beginner",
@@ -174,7 +186,7 @@ def expand_graph(
         for node in path.nodes:
             nid = node.get("id")
             if nid not in nodes_dict:
-                label = list(node.labels)[0] if node.labels else "Concept"
+                label = get_primary_label(list(node.labels)) if node.labels else "Concept"
                 nodes_dict[nid] = {
                     "id": nid,
                     "label": label,
@@ -290,7 +302,7 @@ def get_shortest_path(
         path = res[0]["p"]
         for node in path.nodes:
             nid = node.get("id")
-            label = list(node.labels)[0] if node.labels else "Concept"
+            label = get_primary_label(list(node.labels)) if node.labels else "Concept"
             nodes_dict[nid] = {
                 "id": nid,
                 "label": label,
