@@ -79,6 +79,9 @@ interface AppState {
   addDocument: (doc: DocumentInfo) => void;
   updateDocumentStatus: (id: string, status: string, progress_pct: number) => void;
   removeDocument: (docId: string) => void;
+  deleteDocument: (docId: string) => Promise<void>;
+  replaceTargetDocId: string | null;
+  setReplaceTargetDocId: (docId: string | null) => void;
 
   // Chat state
   chatMessages: ChatMessage[];
@@ -526,6 +529,27 @@ export const useStore = create<AppState>((set) => ({
     saveSessionLocal(state.sessionId, { activeDocumentId: nextActiveId });
     return { documents: docs, activeDocumentId: nextActiveId };
   }),
+  replaceTargetDocId: null,
+  setReplaceTargetDocId: (docId) => set({ replaceTargetDocId: docId }),
+  deleteDocument: async (docId) => {
+    const session = useStore.getState().sessionId;
+    try {
+      const url = session
+        ? `${API_BASE_URL}/documents/${docId}?session_id=${session}`
+        : `${API_BASE_URL}/documents/${docId}`;
+      const response = await fetch(url, { method: 'DELETE' });
+      if (response.ok) {
+        useStore.getState().removeDocument(docId);
+        if (session) {
+          await useStore.getState().reloadSessionData(session);
+        } else {
+          set({ nodes: [], edges: [], highlights: [], citations: [], notes: [] });
+        }
+      }
+    } catch (err) {
+      console.error('Failed to delete document:', err);
+    }
+  },
 
   // Chat state
   chatMessages: [],

@@ -26,6 +26,8 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const activeDocumentId = useStore((state) => state.activeDocumentId);
   const documents = useStore((state) => state.documents);
   const removeDocument = useStore((state) => state.removeDocument);
+  const replaceTargetDocId = useStore((state) => state.replaceTargetDocId);
+  const setReplaceTargetDocId = useStore((state) => state.setReplaceTargetDocId);
 
   const [shouldReplace, setShouldReplace] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -34,7 +36,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
   // Reset state on open if previously completed or failed
   useEffect(() => {
     if (isOpen) {
-      setShouldReplace(false);
+      setShouldReplace(replaceTargetDocId !== null);
       if (uploadState === 'done' || uploadState === 'error') {
         setUploadState('idle');
         setProgress(0);
@@ -42,7 +44,12 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
         setFileName('');
       }
     }
-  }, [isOpen]);
+  }, [isOpen, replaceTargetDocId]);
+
+  const handleClose = () => {
+    setReplaceTargetDocId(null);
+    onClose();
+  };
 
   // Clean up polling interval on unmount
   useEffect(() => {
@@ -101,10 +108,12 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
     formData.append('file', file);
 
     try {
+      const targetReplaceId = replaceTargetDocId || activeDocumentId;
       let uploadUrl = `${API_BASE_URL}/documents/upload?session_id=${sessionId}`;
-      if (shouldReplace && activeDocumentId) {
-        uploadUrl += `&replace_doc_id=${activeDocumentId}`;
-        removeDocument(activeDocumentId);
+      if (shouldReplace && targetReplaceId) {
+        uploadUrl += `&replace_doc_id=${targetReplaceId}`;
+        removeDocument(targetReplaceId);
+        setReplaceTargetDocId(null); // Clear replacement target after triggering
         setGraphData({ nodes: [], edges: [] });
         setSelectedNode(null);
       }
@@ -247,7 +256,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="relative w-full max-w-lg p-6 glass-panel rounded-2xl shadow-2xl border border-cyan-500/20">
         <button 
-          onClick={onClose} 
+          onClick={handleClose} 
           className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
         >
           <X className="w-5 h-5" />
@@ -289,7 +298,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
               <p className="text-xs text-slate-500 mt-1.5 font-sans">Max size 25MB · Text-based PDF only</p>
             </form>
 
-            {activeDocumentId && (
+            {(activeDocumentId || replaceTargetDocId) && (
               <div className="mt-4 p-3 bg-cyan-950/20 rounded-lg border border-cyan-500/10 flex items-center gap-3 animate-fadeIn">
                 <input 
                   type="checkbox"
@@ -302,7 +311,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
                   htmlFor="replace-doc-checkbox"
                   className="text-xs font-semibold text-slate-300 font-sans cursor-pointer select-none"
                 >
-                  Replace active document: <span className="text-cyan-400 font-bold">{(documents.find(d => d.id === activeDocumentId))?.title || 'current document'}</span>
+                  Replace document: <span className="text-cyan-400 font-bold">{(documents.find(d => d.id === (replaceTargetDocId || activeDocumentId)))?.title || 'current document'}</span>
                 </label>
               </div>
             )}
@@ -357,7 +366,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
                 </button>
               )}
               <button 
-                onClick={onClose}
+                onClick={handleClose}
                 className="px-4 py-2 text-sm font-semibold rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md cursor-pointer font-sans"
               >
                 Close

@@ -794,6 +794,85 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             "MATCH (d:Document {id: $doc_id}) SET d.status = 'error', d.error_msg = $error",
             {"doc_id": doc_id, "error": error_msg}
         )
+def delete_document_internal(doc_id: str, session_id: Optional[str] = None):
+    import os
+    import re
+    # Fetch Document storage URL
+    if neo4j_client.is_mock():
+        doc = neo4j_client.mock_nodes.get(doc_id)
+        if not doc or doc.get("label") != "Document":
+            raise HTTPException(status_code=404, detail="Document not found.")
+        if session_id and doc.get("session_id") != session_id:
+            raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
+        url = doc.get("storage_url", "")
+    else:
+        query = "MATCH (d:Document {id: $doc_id}) RETURN d.storage_url as url, d.session_id as session_id"
+        res = neo4j_client.run_query(query, {"doc_id": doc_id})
+        if not res:
+            raise HTTPException(status_code=404, detail="Document not found.")
+        record = res[0]
+        if session_id and record.get("session_id") != session_id:
+            raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
+        url = record.get("url") or record.get("storage_url") or ""
+
+    # Delete storage file
+    if url:
+        if url.startswith("file:///"):
+            filename = os.path.basename(url)
+            supabase_client.delete_file("documents", filename)
+        else:
+            match = re.search(r'documents/(uploads/.*)', url)
+            if match:
+                path = match.group(1)
+                supabase_client.delete_file("documents", path)
+
+    # Delete nodes & edges
+    if neo4j_client.is_mock():
+        # Pop highlight nodes linked to this doc in mock
+        highlight_ids = {
+            e["from"] for e in neo4j_client.mock_edges 
+            if e["to"] == doc_id and e["type"] == "EXTRACTED_FROM"
+        }
+        for hid in highlight_ids:
+            neo4j_client.mock_nodes.pop(hid, None)
+            
+        # Pop citation nodes linked to papers of this doc in mock
+        paper_ids = {
+            nid for nid, n in neo4j_client.mock_nodes.items() 
+            if n.get("doc_id") == doc_id and n.get("label") == "Paper"
+        }
+        citation_ids = {
+            e["from"] for e in neo4j_client.mock_edges 
+            if e["to"] in paper_ids and e["type"] == "FOR_PAPER"
+        }
+        for cid in citation_ids:
+            neo4j_client.mock_nodes.pop(cid, None)
+
+        # Pop doc node
+        neo4j_client.mock_nodes.pop(doc_id, None)
+        # Pop nodes tagged with doc_id
+        nodes_to_delete = {nid for nid, n in neo4j_client.mock_nodes.items() if n.get("doc_id") == doc_id}
+        for nid in nodes_to_delete:
+            neo4j_client.mock_nodes.pop(nid, None)
+            
+        # Pop edges
+        deleted_ids = {doc_id} | nodes_to_delete | highlight_ids | citation_ids
+        neo4j_client.mock_edges = [
+            e for e in neo4j_client.mock_edges 
+            if e["from"] not in deleted_ids and e["to"] not in deleted_ids
+        ]
+        # Pop from status cache
+        extraction_status_cache.pop(doc_id, None)
+    else:
+        # 1. Delete highlights linked to this document
+        neo4j_client.run_query("MATCH (h:Highlight)-[:EXTRACTED_FROM]->(d:Document {id: $doc_id}) DETACH DELETE h", {"doc_id": doc_id})
+        # 2. Delete citations linked to papers of this document
+        neo4j_client.run_query("MATCH (c:Citation)-[:FOR_PAPER]->(p:Paper {doc_id: $doc_id}) DETACH DELETE c", {"doc_id": doc_id})
+        # 3. Delete doc and its nodes/edges from Neo4j
+        neo4j_client.run_query("MATCH (n) WHERE n.doc_id = $doc_id DETACH DELETE n", {"doc_id": doc_id})
+        neo4j_client.run_query("MATCH (d:Document {id: $doc_id}) DETACH DELETE d", {"doc_id": doc_id})
+        extraction_status_cache.pop(doc_id, None)
+
 @router.post("/documents/upload", response_model=UploadResponse)
 async def upload_document(
     background_tasks: BackgroundTasks, 
@@ -807,50 +886,7 @@ async def upload_document(
     try:
         # 1. Delete document to be replaced if specified
         if replace_doc_id:
-            if neo4j_client.is_mock():
-                doc = neo4j_client.mock_nodes.get(replace_doc_id)
-                if doc and doc.get("label") == "Document":
-                    if session_id and doc.get("session_id") != session_id:
-                        raise HTTPException(status_code=403, detail="Access denied. Document to replace does not belong to this session.")
-                    url = doc.get("storage_url", "")
-                else:
-                    url = ""
-            else:
-                query = "MATCH (d:Document {id: $doc_id}) RETURN d.storage_url as url, d.session_id as session_id"
-                res = neo4j_client.run_query(query, {"doc_id": replace_doc_id})
-                if res:
-                    record = res[0]
-                    if session_id and record.get("session_id") != session_id:
-                        raise HTTPException(status_code=403, detail="Access denied. Document to replace does not belong to this session.")
-                    url = record.get("url") or record.get("storage_url") or ""
-                else:
-                    url = ""
-
-            if url:
-                import os
-                if url.startswith("file:///"):
-                    filename = os.path.basename(url)
-                    supabase_client.delete_file("documents", filename)
-                else:
-                    match = re.search(r'documents/(uploads/.*)', url)
-                    if match:
-                        path = match.group(1)
-                        supabase_client.delete_file("documents", path)
-
-            if neo4j_client.is_mock():
-                neo4j_client.mock_nodes.pop(replace_doc_id, None)
-                nodes_to_delete = {nid for nid, n in neo4j_client.mock_nodes.items() if n.get("doc_id") == replace_doc_id}
-                for nid in nodes_to_delete:
-                    neo4j_client.mock_nodes.pop(nid, None)
-                neo4j_client.mock_edges = [
-                    e for e in neo4j_client.mock_edges 
-                    if e.get("doc_id") != replace_doc_id and e["from"] != replace_doc_id and e["to"] != replace_doc_id
-                ]
-                extraction_status_cache.pop(replace_doc_id, None)
-            else:
-                neo4j_client.run_query("MATCH (n) WHERE n.doc_id = $doc_id DETACH DELETE n", {"doc_id": replace_doc_id})
-                neo4j_client.run_query("MATCH (d:Document {id: $doc_id}) DETACH DELETE d", {"doc_id": replace_doc_id})
-                extraction_status_cache.pop(replace_doc_id, None)
+            delete_document_internal(replace_doc_id, session_id)
 
         # Read file bytes
         file_bytes = await file.read()
@@ -1242,57 +1278,6 @@ def get_session_documents(session_id: str):
 
 @router.delete("/documents/{doc_id}")
 def delete_document(doc_id: str, session_id: Optional[str] = Query(None)):
-    import os
-    import re
-    # Fetch Document storage URL
-    if neo4j_client.is_mock():
-        doc = neo4j_client.mock_nodes.get(doc_id)
-        if not doc or doc.get("label") != "Document":
-            raise HTTPException(status_code=404, detail="Document not found.")
-        if session_id and doc.get("session_id") != session_id:
-            raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
-        url = doc.get("storage_url", "")
-    else:
-        query = "MATCH (d:Document {id: $doc_id}) RETURN d.storage_url as url, d.session_id as session_id"
-        res = neo4j_client.run_query(query, {"doc_id": doc_id})
-        if not res:
-            raise HTTPException(status_code=404, detail="Document not found.")
-        record = res[0]
-        if session_id and record.get("session_id") != session_id:
-            raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
-        url = record.get("url") or record.get("storage_url") or ""
-
-    # Delete storage file
-    if url:
-        if url.startswith("file:///"):
-            filename = os.path.basename(url)
-            supabase_client.delete_file("documents", filename)
-        else:
-            match = re.search(r'documents/(uploads/.*)', url)
-            if match:
-                path = match.group(1)
-                supabase_client.delete_file("documents", path)
-
-    # Delete nodes & edges
-    if neo4j_client.is_mock():
-        # Pop doc node
-        neo4j_client.mock_nodes.pop(doc_id, None)
-        # Pop nodes tagged with doc_id
-        nodes_to_delete = {nid for nid, n in neo4j_client.mock_nodes.items() if n.get("doc_id") == doc_id}
-        for nid in nodes_to_delete:
-            neo4j_client.mock_nodes.pop(nid, None)
-        # Pop edges tagged with doc_id
-        neo4j_client.mock_edges = [
-            e for e in neo4j_client.mock_edges 
-            if e.get("doc_id") != doc_id and e["from"] != doc_id and e["to"] != doc_id
-        ]
-        # Pop from status cache
-        extraction_status_cache.pop(doc_id, None)
-    else:
-        # Delete doc and its nodes/edges from Neo4j
-        neo4j_client.run_query("MATCH (n) WHERE n.doc_id = $doc_id DETACH DELETE n", {"doc_id": doc_id})
-        neo4j_client.run_query("MATCH (d:Document {id: $doc_id}) DETACH DELETE d", {"doc_id": doc_id})
-        extraction_status_cache.pop(doc_id, None)
-
+    delete_document_internal(doc_id, session_id)
     return {"status": "success", "message": f"Document {doc_id} deleted successfully."}
 

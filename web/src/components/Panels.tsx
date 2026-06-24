@@ -7,7 +7,7 @@ import {
   FileText, Plus, Database, Cpu, HelpCircle, 
   Map as MapIcon, Sparkles, BookOpen, GraduationCap, 
   ArrowRight, Landmark, Tag, ChevronDown, ChevronUp, UserCheck,
-  Copy, Check, Bookmark, X, ChevronRight, Send, Trash, Loader2
+  Copy, Check, Bookmark, X, ChevronRight, Send, Trash, Loader2, RefreshCw
 } from 'lucide-react';
 
 // ==================== LEFT SIDEBAR ====================
@@ -27,6 +27,8 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const nodes = useStore((state) => state.nodes);
   const selectedNode = useStore((state) => state.selectedNode);
   const setSelectedNode = useStore((state) => state.setSelectedNode);
+  const deleteDocument = useStore((state) => state.deleteDocument);
+  const setReplaceTargetDocId = useStore((state) => state.setReplaceTargetDocId);
 
   // Notes state (Sprint 4)
   const notes = useStore((state) => state.notes);
@@ -443,18 +445,49 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
                 </div>
               ) : (
                 documents.map((doc) => (
-                  <button
+                  <div
                     key={doc.id}
-                    onClick={() => handleDocumentSelect(doc.id)}
-                    className={`w-full text-left px-3 py-2 rounded-lg flex flex-col gap-1 border transition-all ${
+                    className={`group w-full px-3 py-2 rounded-lg flex flex-col gap-1 border transition-all ${
                       activeDocumentId === doc.id
                         ? 'bg-cyan-950/30 border-cyan-500/25 text-cyan-100 shadow-[0_0_10px_rgba(6,182,212,0.05)]'
                         : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-cyan-950/10'
                     }`}
                   >
-                    <div className="flex items-center gap-2 w-full">
-                      <FileText className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />
-                      <span className="text-[11px] font-semibold truncate flex-1 font-sans">{doc.title}</span>
+                    <div className="flex items-center justify-between w-full">
+                      <div 
+                        onClick={() => handleDocumentSelect(doc.id)}
+                        className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer py-0.5"
+                      >
+                        <FileText className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />
+                        <span className="text-[11px] font-semibold truncate flex-1 font-sans">{doc.title}</span>
+                      </div>
+                      
+                      {/* Action Buttons (visible on hover) */}
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2 flex-shrink-0">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setReplaceTargetDocId(doc.id);
+                            onOpenUpload();
+                          }}
+                          className="p-1 hover:bg-cyan-950/50 text-cyan-400 hover:text-cyan-300 rounded transition-all cursor-pointer"
+                          title="Replace Document"
+                        >
+                          <RefreshCw className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            if (confirm(`Are you sure you want to delete "${doc.title}"? This will delete all its graph nodes, notes, highlights, and citations.`)) {
+                              await deleteDocument(doc.id);
+                            }
+                          }}
+                          className="p-1 hover:bg-rose-950/50 text-rose-400 hover:text-rose-300 rounded transition-all cursor-pointer"
+                          title="Delete Document"
+                        >
+                          <Trash className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
                     {doc.status !== 'done' && (
                       <div className="w-full bg-[#030c0b] border border-cyan-500/10 h-1.5 rounded-full overflow-hidden mt-1">
@@ -464,7 +497,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
                         />
                       </div>
                     )}
-                  </button>
+                  </div>
                 ))
               )}
             </div>

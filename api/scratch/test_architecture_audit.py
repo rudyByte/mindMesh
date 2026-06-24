@@ -245,11 +245,110 @@ def test_replace_document_workflow():
 
     print("[PASS] Replace document workflow verification passed.")
 
+def test_cascading_document_deletions():
+    """
+    Test that deleting a document cascadedly purges its associated
+    highlights, papers, and citations from the database/mock store.
+    """
+    if neo4j_client.is_mock():
+        neo4j_client.mock_nodes.clear()
+        neo4j_client.mock_edges.clear()
+
+    session_id = "test-cascade-session"
+    doc_id = "doc-cascade-id"
+    paper_id = "paper-cascade-id"
+    highlight_id = "highlight-cascade-id"
+    citation_id = "citation-cascade-id"
+
+    # Seed Document, Paper, Highlight, Citation
+    if neo4j_client.is_mock():
+        neo4j_client.mock_nodes[doc_id] = {
+            "id": doc_id,
+            "label": "Document",
+            "title": "CascadeDoc.pdf",
+            "session_id": session_id,
+            "storage_url": "file:///uploads/CascadeDoc.pdf"
+        }
+        neo4j_client.mock_nodes[paper_id] = {
+            "id": paper_id,
+            "label": "Paper",
+            "title": "Cascade Paper",
+            "doc_id": doc_id,
+            "session_id": session_id
+        }
+        neo4j_client.mock_nodes[highlight_id] = {
+            "id": highlight_id,
+            "label": "Highlight",
+            "text": "Highlighted text snippet",
+            "session_id": session_id
+        }
+        neo4j_client.mock_nodes[citation_id] = {
+            "id": citation_id,
+            "label": "Citation",
+            "formatted_text": "APA Citation",
+            "session_id": session_id
+        }
+
+        # Relationships
+        neo4j_client.mock_edges.append({
+            "from": highlight_id,
+            "to": doc_id,
+            "type": "EXTRACTED_FROM",
+            "session_id": session_id
+        })
+        neo4j_client.mock_edges.append({
+            "from": citation_id,
+            "to": paper_id,
+            "type": "FOR_PAPER",
+            "session_id": session_id
+        })
+        neo4j_client.mock_edges.append({
+            "from": doc_id,
+            "to": paper_id,
+            "type": "CONTAINS",
+            "doc_id": doc_id,
+            "session_id": session_id
+        })
+    else:
+        neo4j_client.run_query("MATCH (n) DETACH DELETE n")
+        neo4j_client.run_query("CREATE (d:Document {id: $id, title: 'CascadeDoc.pdf', session_id: $session_id, storage_url: 'file:///uploads/CascadeDoc.pdf'})", {"id": doc_id, "session_id": session_id})
+        neo4j_client.run_query("CREATE (p:Paper {id: $id, title: 'Cascade Paper', doc_id: $doc_id, session_id: $session_id})", {"id": paper_id, "doc_id": doc_id, "session_id": session_id})
+        neo4j_client.run_query("CREATE (h:Highlight {id: $id, text: 'Highlighted text snippet', session_id: $session_id})", {"id": highlight_id, "session_id": session_id})
+        neo4j_client.run_query("CREATE (c:Citation {id: $id, formatted_text: 'APA Citation', session_id: $session_id})", {"id": citation_id, "session_id": session_id})
+        neo4j_client.run_query("MATCH (h:Highlight {id: $h_id}), (d:Document {id: $d_id}) MERGE (h)-[:EXTRACTED_FROM]->(d)", {"h_id": highlight_id, "d_id": doc_id})
+        neo4j_client.run_query("MATCH (c:Citation {id: $c_id}), (p:Paper {id: $p_id}) MERGE (c)-[:FOR_PAPER]->(p)", {"c_id": citation_id, "p_id": paper_id})
+        neo4j_client.run_query("MATCH (d:Document {id: $d_id}), (p:Paper {id: $p_id}) MERGE (d)-[:CONTAINS]->(p)", {"d_id": doc_id, "p_id": paper_id})
+
+    # Call DELETE /documents/{doc_id}
+    res = client.delete(f"/documents/{doc_id}?session_id={session_id}")
+    assert res.status_code == 200
+
+    # Verify that everything is deleted
+    if neo4j_client.is_mock():
+        assert doc_id not in neo4j_client.mock_nodes
+        assert paper_id not in neo4j_client.mock_nodes
+        assert highlight_id not in neo4j_client.mock_nodes
+        assert citation_id not in neo4j_client.mock_nodes
+        assert len(neo4j_client.mock_edges) == 0
+    else:
+        # Check Document
+        assert len(neo4j_client.run_query("MATCH (d:Document {id: $id}) RETURN d", {"id": doc_id})) == 0
+        # Check Paper
+        assert len(neo4j_client.run_query("MATCH (p:Paper {id: $id}) RETURN p", {"id": paper_id})) == 0
+        # Check Highlight
+        assert len(neo4j_client.run_query("MATCH (h:Highlight {id: $id}) RETURN h", {"id": highlight_id})) == 0
+        # Check Citation
+        assert len(neo4j_client.run_query("MATCH (c:Citation {id: $id}) RETURN c", {"id": citation_id})) == 0
+
+    print("[PASS] Cascading document deletions verification passed.")
+
 if __name__ == "__main__":
     test_label_interchangeability_and_duplicate_prevention()
     test_copilot_session_and_document_isolation()
     test_citations_and_highlights_session_isolation()
     test_ingestion_failure_cleanup()
     test_replace_document_workflow()
+    test_cascading_document_deletions()
     print("\nALL ARCHITECTURE AUDIT REGRESSION TESTS PASSED SUCCESSFULLY!")
+
 
