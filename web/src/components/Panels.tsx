@@ -890,6 +890,8 @@ export function RightSidebar() {
   const getNodeColor = (label: string) => {
     switch (label) {
       case 'Concept': return 'text-blue-400 bg-blue-500/10 border-blue-500/20';
+      case 'Method': return 'text-green-400 bg-green-500/10 border-green-500/20';
+      case 'Dataset': return 'text-orange-400 bg-orange-500/10 border-orange-500/20';
       case 'Paper': return 'text-purple-400 bg-purple-500/10 border-purple-500/20';
       case 'Author': return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
       case 'Topic': return 'text-amber-400 bg-amber-500/10 border-amber-500/20';

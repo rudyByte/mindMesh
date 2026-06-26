@@ -328,6 +328,8 @@ export default function GraphCanvas() {
   const getNodeColor = (label: string) => {
     switch (label) {
       case 'Concept': return '#06b6d4'; // Neon Cyan
+      case 'Method': return '#22c55e';  // Neon Green
+      case 'Dataset': return '#f97316'; // Bright Orange
       case 'Paper': return '#8b5cf6';   // Soft Violet
       case 'Author': return '#d946ef';  // Vibrant Magenta/Violet
       case 'Topic': return '#f59e0b';   // Warm Amber
