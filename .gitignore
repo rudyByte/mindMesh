@@ -15,6 +15,12 @@ api/venv/
 .env.local
 .env.*.local
 
+# Vercel
+.vercel
+
+# Mock storage (local dev)
+mock_storage/
+
 # IDE
 .idea/
 .vscode/

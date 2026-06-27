@@ -5,7 +5,7 @@ import { useStore, GraphNode } from '../store/useStore';
 import { API_BASE_URL } from '../lib/api';
 import { 
   FileText, Plus, Database, Cpu, HelpCircle, 
-  Map as MapIcon, Sparkles, BookOpen, GraduationCap, 
+  Map as MapIcon, Sparkles, GraduationCap,
   ArrowRight, Landmark, Tag, ChevronDown, ChevronUp, UserCheck,
   Copy, Check, Bookmark, X, ChevronRight, Send, Trash, Loader2, RefreshCw
 } from 'lucide-react';
@@ -29,6 +29,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const setSelectedNode = useStore((state) => state.setSelectedNode);
   const deleteDocument = useStore((state) => state.deleteDocument);
   const setReplaceTargetDocId = useStore((state) => state.setReplaceTargetDocId);
+  const reloadSessionData = useStore((state) => state.reloadSessionData);
 
   // Notes state (Sprint 4)
   const notes = useStore((state) => state.notes);
@@ -52,6 +53,12 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const [noteSearch, setNoteSearch] = useState('');
   const [noteInput, setNoteInput] = useState('');
   const [noteSubmitLoading, setNoteSubmitLoading] = useState(false);
+
+  const handleEnvironmentChange = async (value: string) => {
+    setGraphFilter(value || null);
+    setSelectedNode(null);
+    if (sessionId) await reloadSessionData(sessionId);
+  };
 
   // Health check state (Sprint 6)
   const [healthStatus, setHealthStatus] = useState<{
@@ -240,14 +247,27 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   return (
     <aside className="mission-sidebar mission-sidebar-left w-60 h-full flex flex-col select-none">
       {/* Brand Logo */}
-      <div className="p-4 border-b border-cyan-500/10 flex items-center gap-2.5">
+      <div className="mission-brandbar p-4 border-b border-cyan-500/10 flex items-center gap-2.5">
         <div className="w-8 h-8 rounded-lg bg-cyan-950/80 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shadow-[0_0_12px_rgba(6,182,212,0.25)] glow-active">
           <Database className="w-4.5 h-4.5" />
         </div>
-        <div>
+        <div className="min-w-0">
           <h1 className="font-extrabold text-sm text-white tracking-wider font-sans">MINDMESH AI</h1>
           <p className="text-[9px] text-cyan-400 font-mono font-bold tracking-widest">Knowledge Graph</p>
         </div>
+        <label className="environment-switch ml-auto">
+          <span className="sr-only">Knowledge environment</span>
+          <select
+            aria-label="Knowledge environment"
+            value={graphFilter || ''}
+            onChange={(event) => handleEnvironmentChange(event.target.value)}
+          >
+            <option value="">All nodes</option>
+            <option value="Concept">Concepts</option>
+            <option value="Paper">Papers</option>
+          </select>
+          <ChevronDown aria-hidden="true" />
+        </label>
       </div>
 
       {/* User Session Badge */}
@@ -351,30 +371,6 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
             {/* Navigation options */}
             <nav className="space-y-1">
               <div className="text-[9px] text-cyan-500/60 font-mono font-bold px-2 py-1 tracking-widest">SECTIONS</div>
-              <a 
-                href="#"
-                onClick={(e) => { e.preventDefault(); setGraphFilter(graphFilter === 'Concept' ? null : 'Concept'); }}
-                className={`flex items-center gap-2.5 px-3 py-2 text-xs transition-all rounded-lg border cursor-pointer ${
-                  graphFilter === 'Concept' || graphFilter === null
-                    ? 'font-bold text-cyan-400 bg-cyan-950/20 border-cyan-500/15 shadow-[0_0_10px_rgba(6,182,212,0.05)]'
-                    : 'font-semibold text-slate-400 hover:text-cyan-300 hover:bg-cyan-950/10 border-transparent hover:border-cyan-500/5'
-                }`}
-              >
-                <GraduationCap className="w-4 h-4" />
-                Concepts
-              </a>
-              <a 
-                href="#"
-                onClick={(e) => { e.preventDefault(); setGraphFilter(graphFilter === 'Paper' ? null : 'Paper'); }}
-                className={`flex items-center gap-2.5 px-3 py-2 text-xs transition-all rounded-lg border cursor-pointer ${
-                  graphFilter === 'Paper'
-                    ? 'font-bold text-cyan-400 bg-cyan-950/20 border-cyan-500/15 shadow-[0_0_10px_rgba(6,182,212,0.05)]'
-                    : 'font-semibold text-slate-400 hover:text-cyan-300 hover:bg-cyan-950/10 border-transparent hover:border-cyan-500/5'
-                }`}
-              >
-                <BookOpen className="w-4 h-4" />
-                Papers
-              </a>
               <a 
                 href="#"
                 onClick={(e) => { e.preventDefault(); setGraphFilter(graphFilter === 'Author' ? null : 'Author'); }}

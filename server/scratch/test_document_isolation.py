@@ -8,9 +8,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))) 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))) # project root
 
 from fastapi.testclient import TestClient
-from api.main import app
-from api.utils.neo4j_client import neo4j_client
-from api.config import config
+from server.main import app
+from server.utils.neo4j_client import neo4j_client
+from server.config import config
 
 # Force MULTI_DOCUMENT_MODE to True for testing validation of coexisting document graphs
 config.MULTI_DOCUMENT_MODE = True

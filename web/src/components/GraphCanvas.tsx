@@ -98,7 +98,6 @@ export default function GraphCanvas() {
   const graphMode = useStore((state) => state.graphMode);
   const setGraphMode = useStore((state) => state.setGraphMode);
   const setGraphData = useStore((state) => state.setGraphData);
-  const appendGraphData = useStore((state) => state.appendGraphData);
   const activePathNodeIds = useStore((state) => state.activePathNodeIds);
   const documents = useStore((state) => state.documents);
   const activeDocumentId = useStore((state) => state.activeDocumentId);
@@ -106,6 +105,7 @@ export default function GraphCanvas() {
   const sessionId = useStore((state) => state.sessionId);
 
   const shouldZoomToFit = useRef(false);
+  const selectedNodeId = selectedNode?.id;
 
   const safeNodes = Array.isArray(nodes) ? nodes : [];
   const safeEdges = Array.isArray(edges) ? edges : [];
@@ -180,6 +180,42 @@ export default function GraphCanvas() {
       shouldZoomToFit.current = true;
     }
   }, [nodes, activeDocumentId, safeNodes.length]);
+
+  // Keep traversal controls live. Replace the neighborhood so reducing depth
+  // contracts the graph instead of leaving previously appended nodes behind.
+  useEffect(() => {
+    if (!selectedNodeId || (!sessionId && !activeDocumentId)) return;
+
+    const controller = new AbortController();
+    const expandSelectedNode = async () => {
+      setLoading(true);
+      setCanvasError(null);
+      try {
+        const scope = sessionId
+          ? `session_id=${encodeURIComponent(sessionId)}`
+          : `document_id=${encodeURIComponent(activeDocumentId || '')}`;
+        const response = await fetch(
+          `${API_BASE_URL}/graph/expand?node_id=${encodeURIComponent(selectedNodeId)}&depth=${graphDepth}&mode=${graphMode}&${scope}`,
+          { signal: controller.signal }
+        );
+        if (!response.ok) throw new Error(`Traversal failed (HTTP ${response.status})`);
+        const data = await response.json();
+        setGraphData({
+          nodes: Array.isArray(data.nodes) ? data.nodes : [],
+          edges: Array.isArray(data.edges) ? data.edges : [],
+        });
+        shouldZoomToFit.current = true;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setCanvasError(error instanceof Error ? error.message : 'Traversal request failed');
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    };
+
+    expandSelectedNode();
+    return () => controller.abort();
+  }, [selectedNodeId, graphDepth, graphMode, sessionId, activeDocumentId, setGraphData]);
 
   // Focus/zoom camera when selectedNode changes
   useEffect(() => {
@@ -349,9 +385,6 @@ export default function GraphCanvas() {
       ...node
     };
     setSelectedNode(clickedNode);
-    setLoading(true);
-    // Do not clear canvas error here to keep the current graph visible
-
     try {
       // Fetch full details of the clicked node
       const detailsUrl = sessionId
@@ -365,21 +398,8 @@ export default function GraphCanvas() {
         console.error(`Failed to load node details (HTTP ${detailsRes.status})`);
       }
 
-      // Fetch dynamic node expansion
-      const url = sessionId
-        ? `${API_BASE_URL}/graph/expand?node_id=${node.id}&depth=${graphDepth}&mode=${graphMode}&session_id=${sessionId}`
-        : `${API_BASE_URL}/graph/expand?node_id=${node.id}&depth=${graphDepth}&mode=${graphMode}&document_id=${activeDocumentId || 'doc-1'}`;
-      const response = await fetch(url);
-      if (response.ok) {
-        const expandedData = await response.json();
-        appendGraphData(expandedData);
-      } else {
-        console.error(`Failed to expand node (HTTP ${response.status})`);
-      }
     } catch (err: any) {
-      console.error('Failed to expand/retrieve node details', err);
-    } finally {
-      setLoading(false);
+      console.error('Failed to retrieve node details', err);
     }
   };
 
@@ -529,20 +549,20 @@ export default function GraphCanvas() {
             }}
             linkColor={(link: any) => {
               try {
-                return isPathLink(link) ? '#10b981' : 'rgba(6, 182, 212, 0.12)';
+                return isPathLink(link) ? '#1f7a59' : 'rgba(23, 42, 46, 0.5)';
               } catch (err) {
-                return 'rgba(6, 182, 212, 0.12)';
+                return 'rgba(23, 42, 46, 0.5)';
               }
             }}
             linkWidth={(link: any) => {
               try {
-                return isPathLink(link) ? 2.2 : 0.6;
+                return isPathLink(link) ? 3 : 1.5;
               } catch (err) {
-                return 0.6;
+                return 1.5;
               }
             }}
             linkCurvature={0.25}
-            linkDirectionalArrowLength={3.5}
+            linkDirectionalArrowLength={6}
             linkDirectionalArrowRelPos={1}
             linkDirectionalParticles={(link: any) => {
               try {
@@ -593,7 +613,8 @@ export default function GraphCanvas() {
                 const label = rawLabel.length > maxLabelLength ? rawLabel.slice(0, maxLabelLength) + '...' : rawLabel;
                 
                 // Fixed font size between 10-14px that scales properly with zoom
-                const fontSize = 12;
+                const scale = typeof globalScale === 'number' && !isNaN(globalScale) && globalScale > 0 ? globalScale : 1;
+                const fontSize = Math.max(5, 15 / scale);
                 const rawDegree = (nodeDegrees && node.id) ? (nodeDegrees[node.id] || 0) : 0;
                 const degree = typeof rawDegree === 'number' && !isNaN(rawDegree) && rawDegree >= 0 ? rawDegree : 0;
                 const radius = 3 + Math.sqrt(degree) * 1.5;
@@ -601,8 +622,6 @@ export default function GraphCanvas() {
                 const isSelected = selectedNode?.id === node.id;
                 const isPathNode = activePathNodeIds && activePathNodeIds.includes(node.id);
                 const color = getNodeColor(node.label);
-
-                const scale = typeof globalScale === 'number' && !isNaN(globalScale) && globalScale > 0 ? globalScale : 1;
 
                 // Tech ring/dashboard effect for Selected or Topic nodes
                 if (isSelected || node.label === 'Topic') {

@@ -64,7 +64,7 @@ body {
 }
 
 .mission-sidebar-left {
-  width: 258px;
+  width: 286px;
   border-right: 1px solid var(--ink);
 }
 
@@ -152,6 +152,36 @@ body {
   background: var(--signal);
 }
 
+.mission-brandbar {
+  padding-inline: 12px !important;
+}
+
+.environment-switch {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.environment-switch select {
+  width: 94px !important;
+  height: 32px;
+  padding: 0 24px 0 9px !important;
+  appearance: none;
+  font: 700 10px/1 var(--font-outfit), sans-serif;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  background: var(--surface) !important;
+  border: 1px solid var(--ink) !important;
+}
+
+.environment-switch svg {
+  position: absolute;
+  right: 6px;
+  top: 10px;
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+}
+
 .mission-sidebar-left > div:first-child > div:first-child {
   border: 1px solid var(--ink) !important;
   background: transparent !important;
@@ -220,6 +250,17 @@ body {
 
 .mission-canvas > div[class*="top-4"][class*="left-4"] span {
   color: var(--ink) !important;
+}
+
+.mission-canvas > div[class*="top-4"][class*="left-4"] button,
+.mission-canvas > div[class*="top-4"][class*="left-4"] span {
+  font-size: 13px !important;
+  font-weight: 700;
+}
+
+.mission-canvas input[type="range"] {
+  height: 5px;
+  background: var(--ink);
 }
 
 .view-switcher {

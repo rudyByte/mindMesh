@@ -5,7 +5,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # api folder
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))) # project root
 
-from api.utils.llm_client import LLMClient
+from server.utils.llm_client import LLMClient
 
 def test_static_mock_extraction_counts_and_types():
     # We use a known trigger for static mock extraction

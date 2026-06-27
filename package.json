@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "npx concurrently -n \"web,api\" -c \"cyan,magenta\" \"npm run dev:web\" \"npm run dev:api\"",
     "dev:web": "npm run dev --prefix web",
-    "dev:api": "python -m uvicorn main:app --reload --app-dir api",
+    "dev:api": "python -m uvicorn main:app --reload --app-dir server",
     "install:web": "npm install --prefix web",
     "install:api": "pip install -r api/requirements.txt",
     "install:all": "npm run install:web && npm run install:api"

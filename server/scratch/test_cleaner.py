@@ -14,7 +14,7 @@ if hasattr(sys.stdout, 'reconfigure'):
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
 
-from api.utils.text_cleaner import clean_pdf_text_from_bytes
+from server.utils.text_cleaner import clean_pdf_text_from_bytes
 
 def main():
     root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

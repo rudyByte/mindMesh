@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from api.utils.neo4j_client import neo4j_client
+from server.utils.neo4j_client import neo4j_client
 
 # Simulate Document insertion
 query_insert = """

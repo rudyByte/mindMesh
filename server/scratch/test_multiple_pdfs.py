@@ -11,7 +11,7 @@ async def run_pipeline_on_pdf(pdf_path: str, expect_success: bool):
     print(f"\n--- Testing PDF: {os.path.basename(pdf_path)} (Expect Success: {expect_success}) ---")
     
     from fastapi import UploadFile, BackgroundTasks
-    from api.routers.documents import upload_document, get_document_status, get_document_graph
+    from server.routers.documents import upload_document, get_document_status, get_document_graph
     
     with open(pdf_path, 'rb') as f:
         file_bytes = f.read()

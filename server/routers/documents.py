@@ -325,7 +325,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             all_nodes = [n for n in all_nodes if calculate_entity_quality(n.get("name", ""), n.get("label", "Concept")) > 0.7]
 
         # Check multi-document mode config
-        from api.config import config
+        from config import config
         multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False) or (session_id is not None)
 
         if not multi_doc_mode:
@@ -625,7 +625,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             node_id = str(uuid.uuid4())
             
             # Check multi-document mode config
-            from api.config import config
+            from config import config
             multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False) or (session_id is not None)
 
             # Neo4j query
@@ -931,7 +931,7 @@ async def upload_document(
         file_bytes = await file.read()
 
         # Clear state if not multi-document mode
-        from api.config import config
+        from config import config
         multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False) or (session_id is not None)
         if not multi_doc_mode:
             extraction_status_cache.clear()
@@ -1048,7 +1048,7 @@ def get_document_graph(id: str, session_id: Optional[str] = Query(None)):
             if res and res[0].get("session_id") != session_id:
                 raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
 
-    from api.config import config
+    from config import config
     multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False)
 
     if neo4j_client.is_mock():

@@ -4,7 +4,7 @@ import os
 # Set Python path to find the 'api' directory
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from api.utils.text_cleaner import clean_pdf_text_from_bytes
+from server.utils.text_cleaner import clean_pdf_text_from_bytes
 from pypdf import PdfReader
 
 def main():

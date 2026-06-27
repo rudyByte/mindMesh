@@ -1,5 +1,11 @@
+import sys
+import os
 import re
-from api.utils.llm_client import calculate_entity_quality, normalize_and_clean_concept_name
+
+# Set Python path to find the 'api' directory
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from server.utils.llm_client import calculate_entity_quality, normalize_and_clean_concept_name
 
 def is_valid_concept_name(name: str) -> bool:
     name_clean = name.strip()
@@ -67,7 +73,9 @@ def parse_learning_sequences(text: str) -> tuple[list[dict], list[dict]]:
         items_sorted = sorted(items, key=lambda x: parse_seq_num(x[0]))
         
         if len(items_sorted) >= 2:
+            print(f"Detected {prefix_type} sequence of length {len(items_sorted)}:")
             for seq_num, name in items_sorted:
+                print(f"  - {seq_num}: {name}")
                 nodes.append({
                     "label": "Concept",
                     "name": name,
@@ -91,7 +99,9 @@ def parse_learning_sequences(text: str) -> tuple[list[dict], list[dict]]:
         if len(current_sequence) >= 2:
             valid_items = [clean_concept_name(item[1]) for item in current_sequence if is_valid_concept_name(clean_concept_name(item[1]))]
             if len(valid_items) >= 2:
-                for item_name in valid_items:
+                print(f"Detected sequential list of length {len(valid_items)}:")
+                for i, item_name in enumerate(valid_items):
+                    print(f"  - {i+1}. {item_name}")
                     nodes.append({
                         "label": "Concept",
                         "name": item_name,
@@ -137,6 +147,7 @@ def parse_learning_sequences(text: str) -> tuple[list[dict], list[dict]]:
             valid_parts = [p for p in cleaned_parts if is_valid_concept_name(p)]
             
             if len(valid_parts) >= 2:
+                print(f"Detected arrow sequence: {' -> '.join(valid_parts)}")
                 for p in valid_parts:
                     nodes.append({
                         "label": "Concept",
@@ -169,3 +180,28 @@ def parse_learning_sequences(text: str) -> tuple[list[dict], list[dict]]:
             unique_rels.append(r)
             
     return unique_nodes, unique_rels
+
+# Test text
+sample_doc_text = """
+Welcome to the course.
+Phase 1: Zero-Knowledge Proofs
+We start with Phase 1, which introduces cryptographic verification without revealing secret information.
+Phase 2: Zero-Trust Admin Access
+In Phase 2, we implement decentralization so that administrators cannot compromise voter privacy.
+Phase 3: zero-knowledge voting
+Finally, Phase 3 integrates ZKP and zero-trust admin into a fully secure voting system.
+
+Another document layout:
+1. Deep Learning Basics
+2. Neural Network Optimization
+3. Large Language Model Training
+
+Arrow sequence:
+Linear Algebra -> Matrix Operations -> Neural Networks -> Transformers -> BERT & GPT
+"""
+
+nodes, rels = parse_learning_sequences(sample_doc_text)
+print(f"\nFinal Extracted Nodes count: {len(nodes)}")
+print(f"Final Extracted Relationships count: {len(rels)}")
+print(f"Rels: {rels}")
+
