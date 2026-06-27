@@ -1,12 +1,16 @@
 @import "tailwindcss";
 
 :root {
-  --background: #030c0b;
-  --foreground: #e0f2fe;
-  --card-bg: rgba(6, 18, 17, 0.45);
-  --card-border: rgba(255, 255, 255, 0.05);
-  --primary: #06b6d4; /* Neon cyan */
-  --primary-hover: #22d3ee;
+  --background: #d9eff1;
+  --foreground: #172a2e;
+  --card-bg: rgba(218, 239, 241, 0.92);
+  --card-border: rgba(23, 42, 46, 0.25);
+  --primary: #172a2e;
+  --primary-hover: #f0ff00;
+  --signal: #efff00;
+  --surface: #d9eff1;
+  --surface-2: #c9e7e9;
+  --ink: #172a2e;
   --accent-concept: #06b6d4; /* Neon cyan */
   --accent-paper: #8b5cf6; /* Soft violet */
   --accent-author: #d946ef; /* Vibrant magenta */
@@ -21,15 +25,236 @@
 
 body {
   background-color: var(--background);
-  background-image: 
-    radial-gradient(circle at 50% 50%, #0a1b18 0%, #030c0b 100%),
-    radial-gradient(circle at 10% 20%, rgba(6, 182, 212, 0.04) 0%, transparent 40%),
-    radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.04) 0%, transparent 40%);
+  background-image: radial-gradient(circle at 50% 50%, #e6f6f7 0%, #c9e7e9 100%);
   color: var(--foreground);
   font-family: var(--font-outfit), 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   overflow: hidden;
   margin: 0;
   padding: 0;
+}
+
+/* Quantara-inspired mission control skin */
+.mission-dashboard {
+  color: var(--ink);
+  background: var(--surface);
+  font-family: "Arial Narrow", "Roboto Condensed", var(--font-outfit), sans-serif;
+}
+
+.mission-dashboard::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  opacity: .18;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 160 160' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.12'/%3E%3C/svg%3E");
+}
+
+.mission-workspace {
+  border-bottom: 1px solid var(--ink);
+}
+
+.mission-sidebar {
+  background: var(--surface) !important;
+  color: var(--ink);
+  border-color: var(--ink) !important;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+.mission-sidebar-left {
+  width: 258px;
+  border-right: 1px solid var(--ink);
+}
+
+.mission-sidebar-right {
+  width: 326px;
+  border-left: 1px solid var(--ink);
+}
+
+.mission-sidebar > div {
+  border-color: rgba(23, 42, 46, .28) !important;
+}
+
+.mission-sidebar h1,
+.mission-sidebar h2,
+.mission-sidebar h3,
+.mission-sidebar h4,
+.mission-sidebar p,
+.mission-sidebar label,
+.mission-sidebar span {
+  color: var(--ink);
+}
+
+.mission-sidebar h1 {
+  font-size: 18px;
+  letter-spacing: -.02em;
+}
+
+.mission-sidebar svg {
+  color: var(--ink) !important;
+}
+
+.mission-sidebar button,
+.mission-sidebar select,
+.view-switcher button {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.mission-sidebar select {
+  background: transparent !important;
+  color: var(--ink) !important;
+  border-color: var(--ink) !important;
+}
+
+.mission-sidebar option {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.mission-sidebar button:hover,
+.mission-sidebar button[class*="bg-cyan-"],
+.view-switcher button:hover,
+.view-switcher button[data-active="true"] {
+  color: var(--ink) !important;
+  background: var(--signal) !important;
+  border-color: var(--ink) !important;
+}
+
+.mission-sidebar [class*="rounded-xl"],
+.mission-sidebar [class*="rounded-lg"],
+.mission-sidebar [class*="rounded-full"] {
+  border-radius: 0;
+}
+
+.mission-sidebar [class*="bg-[#"],
+.mission-sidebar [class*="bg-cyan-"],
+.mission-sidebar .glass-card {
+  background: rgba(255,255,255,.16) !important;
+  box-shadow: none !important;
+  backdrop-filter: none;
+}
+
+.mission-sidebar [class*="text-slate-"],
+.mission-sidebar [class*="text-cyan-"] {
+  color: var(--ink) !important;
+}
+
+.mission-sidebar [class*="border-cyan-"],
+.mission-sidebar [class*="border-slate-"] {
+  border-color: rgba(23,42,46,.32) !important;
+}
+
+.mission-sidebar-left > div:first-child {
+  min-height: 74px;
+  background: var(--signal);
+}
+
+.mission-sidebar-left > div:first-child > div:first-child {
+  border: 1px solid var(--ink) !important;
+  background: transparent !important;
+  border-radius: 0;
+}
+
+.mission-sidebar-right > div:first-child {
+  min-height: 74px;
+  background: var(--ink);
+}
+
+.mission-sidebar-right > div:first-child h2,
+.mission-sidebar-right > div:first-child span,
+.mission-sidebar-right > div:first-child svg {
+  color: var(--surface) !important;
+}
+
+.mission-stage {
+  background: #78879a;
+}
+
+.mission-canvas {
+  background:
+    linear-gradient(rgba(23,42,46,.14) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(23,42,46,.14) 1px, transparent 1px),
+    radial-gradient(circle at 50% 45%, #c8dce0 0%, #8999a9 58%, #667486 100%) !important;
+  background-size: 64px 64px, 64px 64px, auto !important;
+}
+
+.mission-canvas .cyber-grid {
+  opacity: .18;
+  background-image: radial-gradient(var(--ink) 1px, transparent 1px);
+  background-size: 9px 9px;
+}
+
+.mission-canvas > div:first-of-type + div,
+.mission-canvas .ambient-glow-cyan,
+.mission-canvas .ambient-glow-violet {
+  display: none;
+}
+
+.mission-canvas > div[class*="top-4"][class*="left-4"] > div {
+  background: var(--surface) !important;
+  color: var(--ink);
+  border: 1px solid var(--ink) !important;
+  border-radius: 0;
+  box-shadow: none !important;
+  backdrop-filter: none;
+}
+
+.mission-canvas > div[class*="top-4"][class*="left-4"] button {
+  border-radius: 0;
+  box-shadow: none !important;
+  color: var(--ink) !important;
+}
+
+.mission-canvas > div[class*="top-4"][class*="left-4"] button[data-active="true"] {
+  background: var(--signal) !important;
+  border-color: var(--ink) !important;
+}
+
+.mission-canvas > div[class*="top-4"][class*="left-4"] button[data-active="false"],
+.view-switcher button[data-active="false"] {
+  background: transparent !important;
+}
+
+.mission-canvas > div[class*="top-4"][class*="left-4"] span {
+  color: var(--ink) !important;
+}
+
+.view-switcher {
+  background: var(--surface);
+  border: 1px solid var(--ink);
+  border-radius: 0;
+  box-shadow: 8px 8px 0 rgba(23,42,46,.14);
+}
+
+.view-switcher button {
+  color: var(--ink) !important;
+}
+
+.mission-drawer {
+  background: var(--signal) !important;
+  color: var(--ink);
+  border-top: 1px solid var(--ink);
+  box-shadow: none;
+}
+
+.mission-drawer > div {
+  border-color: rgba(23,42,46,.3) !important;
+}
+
+.mission-drawer span,
+.mission-drawer button,
+.mission-drawer p {
+  color: var(--ink) !important;
+}
+
+.mission-drawer .glass-card,
+.mission-drawer [class*="border-dashed"] {
+  background: rgba(217,239,241,.76);
+  border-color: var(--ink) !important;
+  border-radius: 0;
 }
 
 /* Glassmorphic UI Panels */

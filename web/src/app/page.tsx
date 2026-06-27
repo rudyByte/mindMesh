@@ -145,21 +145,22 @@ export default function DashboardPage() {
   return (
     <>
       <ConnectionBanner />
-      <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#030c0b]/20 backdrop-blur-sm select-none text-slate-200">
+      <div className="mission-dashboard h-screen w-screen flex flex-col overflow-hidden select-none">
       {/* 3-Pane workspace layout */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="mission-workspace flex-1 flex overflow-hidden">
         {/* Left side controller navigation */}
         <ErrorBoundary name="Left Navigation Panel">
           <LeftSidebar onOpenUpload={() => setIsUploadOpen(true)} />
         </ErrorBoundary>
         
         {/* Center flexible canvas area */}
-        <div className="flex-1 h-full relative flex flex-col">
+        <div className="mission-stage flex-1 h-full relative flex flex-col">
           {/* Header Tab ToggleHUD */}
           {activeDocumentId && (
-            <div className="absolute top-4 right-4 z-20 flex items-center gap-1 bg-[#031412]/80 backdrop-blur-lg border border-cyan-500/10 p-1 rounded-xl shadow-[0_0_15px_rgba(6,182,212,0.06)]">
+            <div className="view-switcher absolute top-4 right-4 z-20 flex items-center gap-1 p-1">
               <button
                 onClick={() => setActiveTab('map')}
+                data-active={activeTab === 'map'}
                 className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
                   activeTab === 'map' 
                     ? 'bg-cyan-600/80 border border-cyan-400/30 text-white shadow-[0_0_10px_rgba(6,182,212,0.2)]' 
@@ -171,6 +172,7 @@ export default function DashboardPage() {
               </button>
               <button
                 onClick={() => setActiveTab('text')}
+                data-active={activeTab === 'text'}
                 className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
                   activeTab === 'text' 
                     ? 'bg-cyan-600/80 border border-cyan-400/30 text-white shadow-[0_0_10px_rgba(6,182,212,0.2)]' 

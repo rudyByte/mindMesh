@@ -238,7 +238,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   };
 
   return (
-    <aside className="w-60 h-full flex flex-col glass-panel border-r border-cyan-500/10 bg-[#030e0d]/70 select-none">
+    <aside className="mission-sidebar mission-sidebar-left w-60 h-full flex flex-col select-none">
       {/* Brand Logo */}
       <div className="p-4 border-b border-cyan-500/10 flex items-center gap-2.5">
         <div className="w-8 h-8 rounded-lg bg-cyan-950/80 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shadow-[0_0_12px_rgba(6,182,212,0.25)] glow-active">
@@ -901,7 +901,7 @@ export function RightSidebar() {
   };
 
   return (
-    <aside className="w-80 h-full flex flex-col glass-panel border-l border-cyan-500/10 bg-[#030e0d]/70 select-none">
+    <aside className="mission-sidebar mission-sidebar-right w-80 h-full flex flex-col select-none">
       {/* Tab Header */}
       <div className="p-4 border-b border-cyan-500/10 flex items-center justify-between">
         <h2 className="text-xs font-bold text-slate-300 flex items-center gap-1.5 uppercase tracking-wider font-sans">
@@ -1315,7 +1315,7 @@ export function BottomPanel() {
   }, [sessionId, setHighlights]);
 
   return (
-    <footer className="w-full glass-panel border-t border-cyan-500/10 bg-[#030e0d]/70 select-none">
+    <footer className="mission-drawer w-full select-none">
       {/* Bar Header Toggle */}
       <div 
         onClick={() => setIsExpanded(!isExpanded)}

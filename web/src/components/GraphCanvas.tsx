@@ -389,8 +389,7 @@ export default function GraphCanvas() {
   return (
     <div 
       ref={containerRef} 
-      className="relative w-full h-full select-none overflow-hidden"
-      style={{ background: 'radial-gradient(circle at center, #091a18 0%, #030c0b 100%)' }}
+      className="mission-canvas relative w-full h-full select-none overflow-hidden"
     >
       {/* Cyber Grid Overlay */}
       <div className="absolute inset-0 cyber-grid pointer-events-none opacity-30" />
@@ -405,6 +404,7 @@ export default function GraphCanvas() {
         <div className="flex items-center gap-1 bg-[#031412]/80 backdrop-blur-lg border border-cyan-500/10 p-1 rounded-xl shadow-[0_0_15px_rgba(6,182,212,0.06)]">
           <button
             onClick={() => setGraphMode('basic')}
+            data-active={graphMode === 'basic'}
             className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
               graphMode === 'basic' 
                 ? 'bg-cyan-600/80 border border-cyan-400/30 text-white shadow-[0_0_10px_rgba(6,182,212,0.2)]' 
@@ -416,6 +416,7 @@ export default function GraphCanvas() {
           </button>
           <button
             onClick={() => setGraphMode('advanced')}
+            data-active={graphMode === 'advanced'}
             className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
               graphMode === 'advanced' 
                 ? 'bg-cyan-600/80 border border-cyan-400/30 text-white shadow-[0_0_10px_rgba(6,182,212,0.2)]' 
