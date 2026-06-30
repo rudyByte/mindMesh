@@ -681,6 +681,60 @@ class LLMClient:
                         "description": description
                     }
 
+        # 1.1 Extract Technical Suffix Phrases (Domain Specific Noun Phrases)
+        domain_keywords = [
+            "system", "architecture", "method", "algorithm", "model", "approach", 
+            "framework", "network", "function", "mechanism", "protocol", "identity", 
+            "ledger", "credit", "market", "infrastructure", "verification", "technology",
+            "proof", "signature", "decryption", "blockchain", "contract", "security"
+        ]
+        
+        for sent in sentences:
+            words = sent.split()
+            for i in range(len(words)):
+                w = words[i].lower().strip(',.;:()[]{}!?"\'')
+                if w in domain_keywords:
+                    phrase_words = []
+                    j = i - 1
+                    while j >= max(0, i - 2):
+                        prev_w = words[j].strip(',.;:()[]{}!?"\'')
+                        prev_w_low = prev_w.lower()
+                        if (
+                            prev_w_low not in STOP_WORDS 
+                            and prev_w_low not in GENERIC_BLACKLIST
+                            and prev_w.isalpha()
+                            and not prev_w.isupper()
+                        ):
+                            phrase_words.insert(0, prev_w)
+                            j -= 1
+                        else:
+                            break
+                    phrase_words.append(words[i].strip(',.;:()[]{}!?"\''))
+                    if len(phrase_words) >= 2:
+                        phrase_clean = " ".join(phrase_words)
+                        normalized_name = singularize_concept_name(phrase_clean)
+                        normalized_name = " ".join([word.capitalize() for word in normalized_name.split()])
+                        normalized_low = normalized_name.lower()
+                        
+                        if normalized_low not in concepts_map and len(normalized_name) > 3:
+                            label = "Concept"
+                            if any(x in normalized_low for x in ["method", "algorithm", "model", "approach", "architecture", "framework", "network", "function", "optimizer"]):
+                                label = "Method"
+                            elif any(x in normalized_low for x in ["dataset", "benchmark", "corpus", "data", "source", "wmt", "imagenet", "glue"]):
+                                label = "Dataset"
+                            elif any(x in normalized_low for x in ["blockchain", "oracle", "satellite", "system", "technology"]):
+                                label = "Technology"
+                                
+                            description = sent
+                            if len(description) > 150:
+                                description = description[:147] + "..."
+                                
+                            concepts_map[normalized_low] = {
+                                "label": label,
+                                "name": normalized_name,
+                                "description": description
+                            }
+
         # Cap dynamic concept count to 15 per chunk to avoid rendering messy graphs
         sorted_concepts = list(concepts_map.values())[:15]
         nodes.extend(sorted_concepts)

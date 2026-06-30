@@ -257,6 +257,14 @@ class Neo4jClient:
                 label = "Keyword"
             elif ":TOPIC" in query_upper:
                 label = "Topic"
+            elif ":SUBTOPIC" in query_upper:
+                label = "Subtopic"
+            elif ":TECHNOLOGY" in query_upper:
+                label = "Technology"
+            elif ":FRAMEWORK" in query_upper:
+                label = "Framework"
+            elif ":APPLICATION" in query_upper:
+                label = "Application"
             elif ":INSTITUTION" in query_upper:
                 label = "Institution"
             elif ":METHOD" in query_upper:
@@ -278,7 +286,7 @@ class Neo4jClient:
                 for nid, mn in self.mock_nodes.items():
                     mn_label = mn.get("label", "Concept")
                     is_concept_like = (
-                        (label in ["Concept", "Topic", "Keyword", "Author", "Method", "Dataset"] and mn_label in ["Concept", "Topic", "Keyword", "Author", "Method", "Dataset"])
+                        (label in ["Concept", "Topic", "Subtopic", "Keyword", "Author", "Method", "Dataset", "Technology", "Framework", "Application", "Institution"] and mn_label in ["Concept", "Topic", "Subtopic", "Keyword", "Author", "Method", "Dataset", "Technology", "Framework", "Application", "Institution"])
                         or label == mn_label
                     )
                     if is_concept_like:
@@ -286,12 +294,12 @@ class Neo4jClient:
                         if mn_name == name_val:
                             # Match session or doc
                             session_match = True
-                            if sess_val is not None or mn.get("session_id") is not None:
-                                session_match = (mn.get("session_id") == sess_val)
-                            
                             doc_match = True
-                            if d_val is not None or mn.get("doc_id") is not None:
-                                doc_match = (mn.get("doc_id") == d_val)
+                            if sess_val is not None:
+                                session_match = (mn.get("session_id") == sess_val)
+                            else:
+                                if d_val is not None or mn.get("doc_id") is not None:
+                                    doc_match = (mn.get("doc_id") == d_val)
                                 
                             if session_match and doc_match:
                                 existing_id = nid

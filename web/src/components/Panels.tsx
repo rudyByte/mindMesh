@@ -281,10 +281,10 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
         </div>
       </div>
 
-      {/* Session Manager HUD */}
-      <div className="px-4 py-3 border-b border-cyan-500/10 bg-[#041413]/40 flex flex-col gap-2.5 animate-fadeIn">
+      {/* Sessions / Chat History List */}
+      <div className="px-4 py-3 border-b border-cyan-500/10 bg-[#041413]/40 flex flex-col gap-2 animate-fadeIn">
         <div className="flex items-center justify-between">
-          <span className="text-[9px] text-cyan-400/80 font-mono font-bold tracking-widest uppercase">ACTIVE SESSION</span>
+          <span className="text-[9px] text-cyan-400/80 font-mono font-bold tracking-widest uppercase">Chat History & Sessions</span>
           <button
             onClick={() => createSession()}
             className="p-1 hover:bg-cyan-950/40 text-cyan-400 hover:text-cyan-300 rounded border border-cyan-500/10 hover:border-cyan-500/35 transition-all cursor-pointer"
@@ -293,29 +293,35 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
             <Plus className="w-3.5 h-3.5" />
           </button>
         </div>
-        <div className="flex items-center gap-1.5 w-full min-w-0">
-          <select
-            value={sessionId || ''}
-            onChange={(e) => switchSession(e.target.value)}
-            title={sessionsList.find(s => s.id === sessionId)?.name || ''}
-            className="flex-1 min-w-0 w-full px-2.5 py-1.5 rounded-lg bg-[#030c0b] border border-cyan-500/20 text-xs font-medium text-slate-200 focus:outline-none focus:border-cyan-500/50 cursor-pointer truncate"
-          >
-            {sessionsList.map((session) => (
-              <option key={session.id} value={session.id} title={session.name}>
-                {session.name}
-              </option>
-            ))}
-          </select>
-          {sessionsList.length > 1 && (
-            <button
-              onClick={() => sessionId && deleteSession(sessionId)}
-              className="flex-shrink-0 p-2 bg-rose-950/20 hover:bg-rose-900/40 text-rose-400 hover:text-rose-300 rounded-lg border border-rose-500/10 hover:border-rose-500/35 transition-all cursor-pointer flex items-center justify-center"
-              title="Delete Active Session"
-              aria-label="Delete Active Session"
-            >
-              <Trash className="w-3.5 h-3.5" />
-            </button>
-          )}
+        <div className="max-h-36 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
+          {sessionsList.map((session) => {
+            const isActive = session.id === sessionId;
+            return (
+              <div
+                key={session.id}
+                onClick={() => switchSession(session.id)}
+                className={`group flex items-center justify-between px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer select-none ${
+                  isActive
+                    ? 'bg-cyan-950/40 border-cyan-500/30 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.1)]'
+                    : 'bg-transparent border-transparent text-slate-400 hover:text-slate-200 hover:bg-[#061211]/20'
+                }`}
+              >
+                <span className="truncate flex-1 font-sans pr-1">{session.name}</span>
+                {sessionsList.length > 1 && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteSession(session.id);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 p-1 text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 rounded transition-all cursor-pointer"
+                    title="Delete Session"
+                  >
+                    <Trash className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 

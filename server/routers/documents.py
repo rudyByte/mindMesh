@@ -95,6 +95,23 @@ def are_semantically_similar(name1: str, name2: str) -> bool:
                 
     return False
 
+def is_concept_in_text(concept_name: str, text_content: str) -> bool:
+    if not concept_name:
+        return False
+    cleaned_name = concept_name.strip()
+    escaped = re.escape(cleaned_name)
+    if cleaned_name.lower().endswith('y'):
+        base = escaped[:-1]
+        pattern = r'\b' + base + r'(y|ies)\b'
+    elif cleaned_name.lower().endswith('s'):
+        pattern = r'\b' + escaped + r'\b'
+    else:
+        pattern = r'\b' + escaped + r'(s|es)?\b'
+    try:
+        return bool(re.search(pattern, text_content, re.IGNORECASE))
+    except Exception:
+        return cleaned_name.lower() in text_content.lower()
+
 def enrich_node_descriptions(canonical_nodes: list, full_text: str):
     cleaned_text = re.sub(r'\s+', ' ', full_text)
     
@@ -180,6 +197,12 @@ def cluster_and_merge_nodes(nodes: list) -> tuple[list, dict]:
     for cluster in clusters:
         rep = cluster[0]
         for node in cluster:
+            if node.get("is_existing") and not rep.get("is_existing"):
+                rep = node
+                continue
+            elif rep.get("is_existing") and not node.get("is_existing"):
+                continue
+
             rep_label = rep.get("label", "Concept")
             node_label = node.get("label", "Concept")
             
@@ -367,25 +390,52 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         # Add central node to the list of nodes
         all_nodes.append(central_node)
         
+        # Session-wide node merging: if in a session, retrieve and merge with existing session nodes
+        existing_nodes = []
+        if session_id:
+            try:
+                if neo4j_client.is_mock():
+                    for mn in neo4j_client.mock_nodes.values():
+                        if mn.get("session_id") == session_id and mn.get("label") not in ["Document", "Note", "Highlight", "Citation"]:
+                            existing_nodes.append({
+                                "label": mn.get("label", "Concept"),
+                                "name": mn.get("name") or mn.get("title") or "",
+                                "description": mn.get("description", ""),
+                                "difficulty_level": mn.get("difficulty_level", "Beginner"),
+                                "is_existing": True
+                            })
+                else:
+                    query = """
+                    MATCH (n)
+                    WHERE n.session_id = $session_id AND NOT n:Document AND NOT n:Note AND NOT n:Highlight AND NOT n:Citation
+                    RETURN labels(n)[0] as label, coalesce(n.name, n.title) as name, n.description as description, n.difficulty_level as difficulty_level
+                    """
+                    res = neo4j_client.run_query(query, {"session_id": session_id})
+                    for r in res:
+                        existing_nodes.append({
+                            "label": r.get("label") or "Concept",
+                            "name": r.get("name") or "",
+                            "description": r.get("description") or "",
+                            "difficulty_level": r.get("difficulty_level") or "Beginner",
+                            "is_existing": True
+                        })
+                logger.info(f"Retrieved {len(existing_nodes)} existing nodes from session {session_id} for combined merging.")
+            except Exception as e:
+                logger.error(f"Failed to fetch existing session nodes for merging: {e}")
+
+        all_nodes_combined = existing_nodes + all_nodes
+
         # Run global semantic merging and clustering
-        canonical_nodes, name_mapping = cluster_and_merge_nodes(all_nodes)
+        canonical_nodes, name_mapping = cluster_and_merge_nodes(all_nodes_combined)
         
         # Verify that every graph node exists in the current document text
         original_count = len(canonical_nodes)
         
-        def is_concept_in_text(concept_name: str, text_content: str) -> bool:
-            if not concept_name:
-                return False
-            cleaned_name = concept_name.strip()
-            # Use word boundaries to search for the concept as a distinct word/phrase
-            pattern = r'\b' + re.escape(cleaned_name) + r'\b'
-            try:
-                return bool(re.search(pattern, text_content, re.IGNORECASE))
-            except Exception:
-                return cleaned_name.lower() in text_content.lower()
-            
-        canonical_nodes = [n for n in canonical_nodes if is_concept_in_text(n.get("name", ""), text)]
-        logger.info(f"Filtered out {original_count - len(canonical_nodes)} nodes not present in the document text.")
+        if not neo4j_client.is_mock():
+            canonical_nodes = [n for n in canonical_nodes if is_concept_in_text(n.get("name", ""), text)]
+            logger.info(f"Filtered out {original_count - len(canonical_nodes)} nodes not present in the document text.")
+        else:
+            logger.info("[MOCK] Skipping text grounding filter to preserve complete mock graph.")
         
         # Enrich descriptions using document text context
         logger.info("Enriching node descriptions using document text context...")
@@ -709,7 +759,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 for nid, mn in neo4j_client.mock_nodes.items():
                     mn_label = mn.get("label", "Concept")
                     is_label_match = (
-                        (label in ["Concept", "Topic", "Keyword", "Author", "Method", "Dataset"] and mn_label in ["Concept", "Topic", "Keyword", "Author", "Method", "Dataset"])
+                        (label in ["Concept", "Topic", "Subtopic", "Keyword", "Author", "Method", "Dataset", "Technology", "Framework", "Application"] and mn_label in ["Concept", "Topic", "Subtopic", "Keyword", "Author", "Method", "Dataset", "Technology", "Framework", "Application"])
                         or label == mn_label
                     )
                     if is_label_match and mn.get("name", "").lower() == name.lower():
