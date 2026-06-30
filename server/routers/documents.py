@@ -650,6 +650,40 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                     adj[f_low].add(t_low)
                     adj[t_low].add(f_low)
                 
+        # Always represent the uploaded research document itself as a Paper.
+        # LLM extraction often returns only concepts from the paper body, which
+        # previously left the Papers workspace and citation tools empty.
+        if canonical_nodes and not any(n.get("label") == "Paper" for n in canonical_nodes):
+            paper_title = re.sub(r"^[0-9a-fA-F-]{36}_", "", filename)
+            paper_title = re.sub(r"\.pdf$", "", paper_title, flags=re.IGNORECASE).strip()
+            paper_node = {
+                "label": "Paper",
+                "name": paper_title or "Uploaded Research Paper",
+                "description": f"Source research paper for the extracted knowledge graph: {paper_title}.",
+                "year": None,
+                "doi": None,
+            }
+            canonical_nodes.append(paper_node)
+
+            concept_candidates = [
+                n for n in canonical_nodes
+                if n is not paper_node and n.get("label") in ["Topic", "Concept", "Method", "Dataset"]
+            ]
+            if concept_candidates:
+                anchor = max(
+                    concept_candidates,
+                    key=lambda n: len(adj.get(n.get("name", "").lower().strip(), set()))
+                )
+                final_relationships.append({
+                    "from": paper_node["name"],
+                    "to": anchor["name"],
+                    "type": "MENTIONS"
+                })
+                paper_key = paper_node["name"].lower().strip()
+                anchor_key = anchor["name"].lower().strip()
+                adj.setdefault(paper_key, set()).add(anchor_key)
+                adj.setdefault(anchor_key, set()).add(paper_key)
+
         # Log top extracted concepts and relationships
         logger.info("=== TOP EXTRACTED KNOWLEDGE GRAPH ELEMENTS ===")
         sorted_nodes_log = sorted(canonical_nodes, key=lambda x: len(adj.get(x["name"].lower().strip(), set())), reverse=True)

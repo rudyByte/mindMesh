@@ -113,7 +113,10 @@ export default function GraphCanvas() {
   const filteredNodes = React.useMemo(() => {
     if (!graphFilter) return safeNodes;
     if (graphFilter === 'Concept') {
-      return safeNodes.filter(n => n && (n.label === 'Concept' || n.label === 'Topic'));
+      return safeNodes.filter(n => n && ['Concept', 'Topic', 'Method', 'Dataset', 'Keyword'].includes(n.label));
+    }
+    if (graphFilter === 'Paper') {
+      return safeNodes.filter(n => n && ['Paper', 'Author'].includes(n.label));
     }
     if (graphFilter === 'Learning Path') {
       const pathSet = new Set(activePathNodeIds || []);
@@ -451,17 +454,19 @@ export default function GraphCanvas() {
         {/* Depth Slider */}
         <div className="flex items-center gap-3 bg-[#031412]/80 backdrop-blur-lg border border-cyan-500/10 px-4 py-1.5 rounded-xl shadow-[0_0_15px_rgba(6,182,212,0.06)]">
           <span className="text-xs font-medium text-cyan-400/70">Traversal Hops:</span>
-          <input
-            type="range"
-            min="1"
-            max="3"
-            value={graphDepth}
-            onChange={(e) => setGraphDepth(parseInt(e.target.value))}
-            className="w-20 accent-cyan-500 cursor-pointer h-1 bg-slate-800 rounded-lg appearance-none"
-          />
-          <span className="text-xs font-bold text-cyan-400 font-mono bg-cyan-950/30 border border-cyan-500/20 px-2 py-0.5 rounded">
-            {graphDepth}
-          </span>
+          <div className="hop-selector" role="group" aria-label="Traversal hops">
+            {[1, 2, 3].map((depth) => (
+              <button
+                key={depth}
+                type="button"
+                aria-pressed={graphDepth === depth}
+                data-active={graphDepth === depth}
+                onClick={() => setGraphDepth(depth)}
+              >
+                {depth}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

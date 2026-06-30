@@ -90,6 +90,7 @@ body {
 .mission-sidebar h1 {
   font-size: 18px;
   letter-spacing: -.02em;
+  white-space: nowrap;
 }
 
 .mission-sidebar svg {
@@ -261,6 +262,30 @@ body {
 .mission-canvas input[type="range"] {
   height: 5px;
   background: var(--ink);
+}
+
+.hop-selector {
+  display: flex;
+  border: 1px solid var(--ink);
+}
+
+.hop-selector button {
+  width: 30px;
+  height: 28px;
+  border: 0;
+  border-right: 1px solid var(--ink);
+  background: transparent !important;
+  color: var(--ink) !important;
+  font: 800 12px/1 var(--font-outfit), sans-serif;
+  cursor: pointer;
+}
+
+.hop-selector button:last-child {
+  border-right: 0;
+}
+
+.hop-selector button[data-active="true"] {
+  background: var(--signal) !important;
 }
 
 .view-switcher {

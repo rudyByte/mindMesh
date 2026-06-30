@@ -7,7 +7,7 @@
     "dev:web": "npm run dev --prefix web",
     "dev:api": "python -m uvicorn main:app --reload --app-dir server",
     "install:web": "npm install --prefix web",
-    "install:api": "pip install -r api/requirements.txt",
+    "install:api": "pip install -r server/requirements.txt",
     "install:all": "npm run install:web && npm run install:api"
   }
 }
