@@ -7,7 +7,7 @@ import {
   FileText, Plus, Database, Cpu, HelpCircle, 
   Map as MapIcon, Sparkles, GraduationCap,
   ArrowRight, Landmark, Tag, ChevronDown, ChevronUp, UserCheck,
-  Copy, Check, Bookmark, X, ChevronRight, Send, Trash, Loader2, RefreshCw
+  Copy, Check, Bookmark, X, ChevronRight, ChevronLeft, Send, Trash, Loader2, RefreshCw
 } from 'lucide-react';
 
 // ==================== LEFT SIDEBAR ====================
@@ -35,6 +35,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const notes = useStore((state) => state.notes);
   const setNotes = useStore((state) => state.setNotes);
   const addNote = useStore((state) => state.addNote);
+  const deleteNote = useStore((state) => state.deleteNote);
   
   // Citations state (Sprint 5)
   const citations = useStore((state) => state.citations);
@@ -53,6 +54,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const [noteSearch, setNoteSearch] = useState('');
   const [noteInput, setNoteInput] = useState('');
   const [noteSubmitLoading, setNoteSubmitLoading] = useState(false);
+  const [deleteConfirmNoteId, setDeleteConfirmNoteId] = useState<string | null>(null);
 
   const handleEnvironmentChange = async (value: string) => {
     setGraphFilter(value || null);
@@ -550,20 +552,62 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
                   No notes saved yet. Write a personal note above to capture insights.
                 </div>
               ) : (
-                notes.map((note) => (
-                  <div key={note.id} className="p-2.5 rounded-lg bg-cyan-950/10 border border-cyan-500/5 space-y-2">
-                    <p className="text-[11px] text-slate-300 font-medium leading-relaxed whitespace-pre-wrap">{note.content}</p>
-                    {note.concepts && note.concepts.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {note.concepts.map((c: string, idx: number) => (
-                          <span key={idx} className="bg-cyan-500/10 text-cyan-300 border border-cyan-500/15 px-1.5 py-0.5 rounded text-[8px] font-mono font-bold">
-                            {c}
-                          </span>
-                        ))}
+                notes.map((note) => {
+                  const isConfirming = deleteConfirmNoteId === note.id;
+                  return (
+                    <div key={note.id} className="group p-2.5 rounded-lg bg-cyan-950/10 border border-cyan-500/5 hover:border-cyan-500/15 transition-all space-y-2 relative">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-[11px] text-slate-300 font-medium leading-relaxed whitespace-pre-wrap flex-1">{note.content}</p>
+                        {isConfirming ? (
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <span className="text-[9px] text-rose-400 font-mono font-bold uppercase tracking-wider">Delete?</span>
+                            <button
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                await deleteNote(note.id);
+                                setDeleteConfirmNoteId(null);
+                              }}
+                              className="p-1 bg-rose-950/40 border border-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white rounded transition-all cursor-pointer"
+                              title="Confirm Delete"
+                            >
+                              <Check className="w-3 h-3" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeleteConfirmNoteId(null);
+                              }}
+                              className="p-1 bg-slate-900/40 border border-slate-700/20 text-slate-400 hover:bg-slate-700 hover:text-white rounded transition-all cursor-pointer"
+                              title="Cancel"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteConfirmNoteId(note.id);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 p-1 text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 rounded transition-all cursor-pointer flex-shrink-0"
+                            title="Delete Note"
+                          >
+                            <Trash className="w-3 h-3" />
+                          </button>
+                        )}
                       </div>
-                    )}
-                  </div>
-                ))
+                      {note.concepts && note.concepts.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {note.concepts.map((c: string, idx: number) => (
+                            <span key={idx} className="bg-cyan-500/10 text-cyan-300 border border-cyan-500/15 px-1.5 py-0.5 rounded text-[8px] font-mono font-bold">
+                              {c}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>
@@ -696,6 +740,7 @@ export function RightSidebar() {
   const [citationSaving, setCitationSaving] = useState(false);
   const [pathGenerating, setPathGenerating] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isOpen, setIsOpen] = useState(true);
 
   // Calculate learning path steps mapping
   const pathSteps = activePathNodeIds.map(id => globalNodes.find(n => n.id === id)).filter(Boolean);
@@ -902,17 +947,36 @@ export function RightSidebar() {
     }
   };
 
+  if (!isOpen) {
+    return (
+      <div className="absolute top-24 right-0 z-40">
+        <button
+          onClick={() => setIsOpen(true)}
+          className="bg-[#041210]/95 border border-cyan-500/20 border-r-0 rounded-l-xl p-2.5 shadow-[0_0_15px_rgba(6,182,212,0.15)] text-cyan-400 hover:text-cyan-300 hover:bg-cyan-950/40 transition-all flex items-center justify-center cursor-pointer group"
+          title="Open AI Detail Panel"
+        >
+          <ChevronLeft className="w-5 h-5 group-hover:-translate-x-0.5 transition-transform" />
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <aside className="mission-sidebar mission-sidebar-right w-80 h-full flex flex-col select-none">
+    <aside className="mission-sidebar mission-sidebar-right w-full sm:w-80 lg:w-96 flex-shrink-0 absolute md:relative right-0 h-full flex flex-col select-none bg-[#020a09] z-40 border-l border-cyan-500/10 shadow-2xl md:shadow-none">
       {/* Tab Header */}
       <div className="p-4 border-b border-cyan-500/10 flex items-center justify-between">
         <h2 className="text-xs font-bold text-slate-300 flex items-center gap-1.5 uppercase tracking-wider font-sans">
           <Sparkles className="w-4 h-4 text-cyan-400 animate-pulse" />
           AI Detail Panel
         </h2>
-        <span className="text-[9px] text-cyan-400 font-mono font-bold bg-cyan-950/30 border border-cyan-500/20 px-2 py-0.5 rounded-full uppercase tracking-wider">
-          {user?.role || 'student'} Mode
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-[9px] text-cyan-400 font-mono font-bold bg-cyan-950/30 border border-cyan-500/20 px-2 py-0.5 rounded-full uppercase tracking-wider hidden sm:block">
+            {user?.role || 'student'} Mode
+          </span>
+          <button onClick={() => setIsOpen(false)} className="text-slate-400 hover:text-rose-400 transition-colors p-1 rounded hover:bg-rose-500/10 cursor-pointer" title="Close Panel">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Details & Copilot Container */}

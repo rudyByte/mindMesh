@@ -216,3 +216,35 @@ def search_notes(q: str = Query(...), session_id: str = Query(...)):
         }
         for r in res
     ]
+
+@router.delete("/notes/{note_id}")
+def delete_note(note_id: str, session_id: str = Query(...)):
+    # Validate note ownership / exists
+    if neo4j_client.is_mock():
+        note = neo4j_client.mock_nodes.get(note_id)
+        if not note or note.get("label") != "Note":
+            raise HTTPException(status_code=404, detail="Note not found.")
+        if note.get("session_id") != session_id:
+            raise HTTPException(status_code=403, detail="Access denied. Note does not belong to this session.")
+        
+        # Pop note node
+        neo4j_client.mock_nodes.pop(note_id, None)
+        # Pop edges linked to this note
+        neo4j_client.mock_edges = [
+            e for e in neo4j_client.mock_edges
+            if e["from"] != note_id and e["to"] != note_id
+        ]
+    else:
+        # Check ownership first
+        check_query = "MATCH (n:Note {id: $note_id}) RETURN n.session_id as session_id"
+        check_res = neo4j_client.run_query(check_query, {"note_id": note_id})
+        if not check_res:
+            raise HTTPException(status_code=404, detail="Note not found.")
+        if check_res[0].get("session_id") != session_id:
+            raise HTTPException(status_code=403, detail="Access denied. Note does not belong to this session.")
+            
+        neo4j_client.run_query(
+            "MATCH (n:Note {id: $note_id, session_id: $session_id}) DETACH DELETE n",
+            {"note_id": note_id, "session_id": session_id}
+        )
+    return {"status": "success", "message": f"Note {note_id} deleted successfully."}

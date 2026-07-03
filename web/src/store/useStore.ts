@@ -99,6 +99,7 @@ interface AppState {
   notes: NoteInfo[];
   setNotes: (notes: NoteInfo[]) => void;
   addNote: (note: NoteInfo) => void;
+  deleteNote: (noteId: string) => Promise<void>;
   highlights: HighlightInfo[];
   setHighlights: (highlights: HighlightInfo[]) => void;
   addHighlight: (highlight: HighlightInfo) => void;
@@ -245,11 +246,16 @@ export const useStore = create<AppState>((set) => ({
         highlights: sessionData?.highlights || [],
         citations: sessionData?.citations || [],
         activeDocumentId: sessionData?.activeDocumentId || null,
+        graphDepth: sessionData?.graphDepth || 1,
+        graphMode: sessionData?.graphMode || 'basic',
         selectedNode: null,
         activePathNodeIds: [],
         learningPathNarration: null,
         nodes: [],
-        edges: []
+        edges: [],
+        documentText: null,
+        chatLoading: false,
+        replaceTargetDocId: null
       });
 
       // Trigger load of correct data from backend
@@ -291,7 +297,9 @@ export const useStore = create<AppState>((set) => ({
         notes: [],
         highlights: [],
         citations: [],
-        activeDocumentId: null
+        activeDocumentId: null,
+        graphDepth: 1,
+        graphMode: 'basic' as const
       };
       localStorage.setItem(`mindmesh_session_data_${newId}`, JSON.stringify(newSessionData));
       
@@ -304,11 +312,16 @@ export const useStore = create<AppState>((set) => ({
         highlights: [],
         citations: [],
         activeDocumentId: null,
+        graphDepth: 1,
+        graphMode: 'basic',
         selectedNode: null,
         activePathNodeIds: [],
         learningPathNarration: null,
         nodes: [],
-        edges: []
+        edges: [],
+        documentText: null,
+        chatLoading: false,
+        replaceTargetDocId: null
       });
     } catch (err) {
       console.error('Failed to create session:', err);
@@ -337,11 +350,16 @@ export const useStore = create<AppState>((set) => ({
         highlights: sessionData?.highlights || [],
         citations: sessionData?.citations || [],
         activeDocumentId: sessionData?.activeDocumentId || null,
+        graphDepth: sessionData?.graphDepth || 1,
+        graphMode: sessionData?.graphMode || 'basic',
         selectedNode: null,
         activePathNodeIds: [],
         learningPathNarration: null,
         nodes: [],
-        edges: []
+        edges: [],
+        documentText: null,
+        chatLoading: false,
+        replaceTargetDocId: null
       });
 
       // Trigger load of correct data from backend
@@ -388,11 +406,16 @@ export const useStore = create<AppState>((set) => ({
           highlights: sessionData?.highlights || [],
           citations: sessionData?.citations || [],
           activeDocumentId: sessionData?.activeDocumentId || null,
+          graphDepth: sessionData?.graphDepth || 1,
+          graphMode: sessionData?.graphMode || 'basic',
           selectedNode: null,
           activePathNodeIds: [],
           learningPathNarration: null,
           nodes: [],
-          edges: []
+          edges: [],
+          documentText: null,
+          chatLoading: false,
+          replaceTargetDocId: null
         });
 
         // Trigger load of correct data from backend
@@ -409,16 +432,45 @@ export const useStore = create<AppState>((set) => ({
     if (!id) return;
     try {
       // 0. Fetch documents list from backend
+      let docsData: DocumentInfo[] = [];
       try {
         const docsRes = await fetch(`${API_BASE_URL}/sessions/${id}/documents`);
         if (docsRes.ok) {
-          const docsData = await docsRes.json();
-          set({ documents: docsData || [] });
-          saveSessionLocal(id, { documents: docsData || [] });
+          docsData = await docsRes.json();
         }
       } catch (docsErr) {
         console.error('Failed to reload session documents:', docsErr);
       }
+
+      let nextActiveId: string | null = null;
+      set((state) => {
+        const hasActiveDoc = docsData && docsData.some((d: any) => d.id === state.activeDocumentId);
+        nextActiveId = hasActiveDoc 
+          ? state.activeDocumentId 
+          : (docsData && docsData.length > 0 ? docsData[0].id : null);
+          
+        // Overwrite/update the session name in sessionsList
+        const updatedList = state.sessionsList.map(s => {
+          if (s.id === id) {
+            const name = docsData && docsData.length > 0 ? docsData[0].title : (id === 'session-1' ? 'Session 1' : 'Untitled Session');
+            return { ...s, name };
+          }
+          return s;
+        });
+        localStorage.setItem('mindmesh_sessions_list', JSON.stringify(updatedList));
+
+        return { 
+          documents: docsData || [], 
+          activeDocumentId: nextActiveId,
+          sessionsList: updatedList
+        };
+      });
+
+      // Save documents and activeDocumentId to local storage
+      saveSessionLocal(id, { 
+        documents: docsData || [], 
+        activeDocumentId: nextActiveId 
+      });
 
       // 1. Fetch graph
       const graphRes = await fetch(`${API_BASE_URL}/sessions/${id}/graph`);
@@ -432,6 +484,7 @@ export const useStore = create<AppState>((set) => ({
       if (notesRes.ok) {
         const data = await notesRes.json();
         set({ notes: data || [] });
+        saveSessionLocal(id, { notes: data || [] });
       }
 
       // 3. Fetch highlights
@@ -439,6 +492,7 @@ export const useStore = create<AppState>((set) => ({
       if (highlightsRes.ok) {
         const data = await highlightsRes.json();
         set({ highlights: data || [] });
+        saveSessionLocal(id, { highlights: data || [] });
       }
 
       // 4. Fetch citations
@@ -446,6 +500,7 @@ export const useStore = create<AppState>((set) => ({
       if (citationsRes.ok) {
         const data = await citationsRes.json();
         set({ citations: data || [] });
+        saveSessionLocal(id, { citations: data || [] });
       }
     } catch (err) {
       console.error('Failed to reload session data:', err);
@@ -459,9 +514,15 @@ export const useStore = create<AppState>((set) => ({
   selectedNode: null,
   setSelectedNode: (node) => set({ selectedNode: node }),
   graphDepth: 1,
-  setGraphDepth: (depth) => set({ graphDepth: depth }),
+  setGraphDepth: (depth) => set((state) => {
+    saveSessionLocal(state.sessionId, { graphDepth: depth });
+    return { graphDepth: depth };
+  }),
   graphMode: 'basic',
-  setGraphMode: (mode) => set({ graphMode: mode }),
+  setGraphMode: (mode) => set((state) => {
+    saveSessionLocal(state.sessionId, { graphMode: mode });
+    return { graphMode: mode };
+  }),
   setGraphData: (data) => set({ nodes: data.nodes, edges: data.edges }),
   graphFilter: null,
   setGraphFilter: (filter) => set({ graphFilter: filter }),
@@ -591,6 +652,31 @@ export const useStore = create<AppState>((set) => ({
     saveSessionLocal(state.sessionId, { notes: notes });
     return { notes: notes };
   }),
+  deleteNote: async (noteId) => {
+    const session = useStore.getState().sessionId;
+    if (!session) return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/notes/${noteId}?session_id=${session}`, {
+        method: 'DELETE'
+      });
+      if (response.ok) {
+        set((state) => {
+          const updatedNotes = state.notes.filter((n) => n.id !== noteId);
+          saveSessionLocal(session, { notes: updatedNotes });
+          return { notes: updatedNotes };
+        });
+        
+        // Refresh graph to remove Note node & links
+        const graphResponse = await fetch(`${API_BASE_URL}/sessions/${session}/graph`);
+        if (graphResponse.ok) {
+          const graphData = await graphResponse.json();
+          set({ nodes: graphData.nodes || [], edges: graphData.edges || [] });
+        }
+      }
+    } catch (err) {
+      console.error('Failed to delete note:', err);
+    }
+  },
   highlights: [],
   setHighlights: (highlights) => set((state) => {
     saveSessionLocal(state.sessionId, { highlights: highlights });

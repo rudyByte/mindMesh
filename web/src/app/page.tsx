@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useStore } from '../store/useStore';
 import { LeftSidebar, RightSidebar, BottomPanel } from '../components/Panels';
@@ -9,7 +9,33 @@ import UploadModal from '../components/UploadModal';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { API_BASE_URL } from '../lib/api';
-import { FileText, Map as MapIcon, Sparkles } from 'lucide-react';
+import { FileText, Map as MapIcon, Sparkles, AlignLeft, AlignJustify } from 'lucide-react';
+
+function renderFormattedText(text: string, fontSize: 'sm' | 'base' | 'lg', align: 'justify' | 'left') {
+  if (!text) return null;
+
+  const fontSizeClass = {
+    sm: 'text-xs md:text-sm',
+    base: 'text-sm md:text-base',
+    lg: 'text-base md:text-lg'
+  }[fontSize];
+
+  const alignClass = align === 'justify' ? 'text-justify' : 'text-left';
+
+  return (
+    <div 
+      className={`${fontSizeClass} ${alignClass} text-slate-300/90 font-sans select-text font-normal w-full max-w-full`} 
+      style={{ 
+        whiteSpace: 'pre-wrap', 
+        wordBreak: 'break-word', 
+        overflowWrap: 'anywhere', 
+        lineHeight: 1.7 
+      }}
+    >
+      {text}
+    </div>
+  );
+}
 
 export default function DashboardPage() {
   const user = useStore((state) => state.user);
@@ -35,6 +61,24 @@ export default function DashboardPage() {
   const [selectedText, setSelectedText] = useState('');
   const [popoverCoords, setPopoverCoords] = useState<{ x: number; y: number } | null>(null);
   const [documentTextError, setDocumentTextError] = useState<string | null>(null);
+
+  // Reader display preferences & scroll progress state
+  const [readerFontSize, setReaderFontSize] = useState<'sm' | 'base' | 'lg'>('base');
+  const [readerAlign, setReaderAlign] = useState<'justify' | 'left'>('justify');
+  const [scrollProgress, setScrollProgress] = useState(0);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  const handleScroll = () => {
+    const element = scrollContainerRef.current;
+    if (!element) return;
+    const totalHeight = element.scrollHeight - element.clientHeight;
+    if (totalHeight <= 0) {
+      setScrollProgress(0);
+      return;
+    }
+    const progress = (element.scrollTop / totalHeight) * 100;
+    setScrollProgress(progress);
+  };
 
   useEffect(() => {
     if (!user) {
@@ -195,26 +239,63 @@ export default function DashboardPage() {
               /* PDF Document Raw Text Viewer (Sprint 4) */
               <ErrorBoundary name="Document Text Reader">
                 <div 
-                  className="w-full h-full p-8 overflow-y-auto bg-[#030c0b]/55 font-sans flex flex-col items-center border border-cyan-500/5 backdrop-blur-md"
+                  ref={scrollContainerRef}
+                  onScroll={handleScroll}
+                  className="w-full h-full py-12 px-6 md:px-12 overflow-y-auto bg-gradient-to-b from-[#020a09]/75 to-[#030d0b]/85 font-sans flex flex-col items-center border border-cyan-500/5 backdrop-blur-md relative"
                   onMouseUp={handleTextSelection}
                 >
-                  <div className="w-full max-w-2xl space-y-6 select-text text-justify relative">
-                    <div className="border-b border-cyan-500/10 pb-4 mb-4 select-none">
-                      <h2 className="text-sm font-bold text-cyan-400 flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-cyan-400" /> {activeDocTitle}
-                      </h2>
-                      <p className="text-[10px] text-slate-500 mt-1 font-medium font-sans">
-                        Select any text block to save key insights as graph highlights.
-                      </p>
+                  {/* Reading Progress Indicator */}
+                  <div className="absolute top-0 left-0 w-full h-[3px] bg-cyan-500/10 z-30">
+                    <div 
+                      className="h-full bg-cyan-400 transition-all duration-75 shadow-[0_0_8px_rgba(6,182,212,0.8)]"
+                      style={{ width: `${scrollProgress}%` }}
+                    />
+                  </div>
+
+                  <div className="w-full max-w-2xl bg-[#041210]/40 p-8 md:p-12 rounded-2xl border border-cyan-500/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] select-text relative">
+                    <div className="border-b border-cyan-500/10 pb-4 mb-6 select-none flex items-center justify-between gap-4">
+                      <div>
+                        <h2 className="text-sm font-bold text-cyan-400 flex items-center gap-2">
+                          <FileText className="w-4 h-4 text-cyan-400" /> {activeDocTitle}
+                        </h2>
+                        <p className="text-[10px] text-slate-500 mt-1 font-medium font-sans">
+                          Select text to save insights to the knowledge graph.
+                        </p>
+                      </div>
+
+                      {/* Reading Preferences HUD */}
+                      <div className="flex items-center gap-2 bg-[#020a09]/80 border border-cyan-500/10 p-1.5 rounded-xl shadow-lg">
+                        <button
+                          onClick={() => setReaderFontSize(prev => prev === 'sm' ? 'base' : prev === 'base' ? 'lg' : 'sm')}
+                          className="px-2 py-1 hover:bg-cyan-950/40 text-cyan-400 hover:text-cyan-300 rounded border border-cyan-500/5 transition-all text-[9px] font-bold font-mono uppercase cursor-pointer"
+                          title={`Font Size: ${readerFontSize.toUpperCase()}`}
+                        >
+                          {readerFontSize.toUpperCase()}
+                        </button>
+                        <span className="w-px h-3.5 bg-cyan-500/10" />
+                        <button
+                          onClick={() => setReaderAlign(prev => prev === 'justify' ? 'left' : 'justify')}
+                          className="p-1 hover:bg-cyan-950/40 text-cyan-400 hover:text-cyan-300 rounded border border-cyan-500/5 transition-all cursor-pointer flex items-center justify-center"
+                          title={`Alignment: ${readerAlign.toUpperCase()}`}
+                        >
+                          {readerAlign === 'justify' ? <AlignJustify className="w-3.5 h-3.5" /> : <AlignLeft className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
                     </div>
 
-                    <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap font-medium font-sans">
-                      {documentTextError ? (
-                        <span className="text-rose-400 font-semibold block bg-rose-500/10 p-4 rounded-xl border border-rose-500/20">
-                          Error loading document text: {documentTextError}
-                        </span>
-                      ) : documentText || "Parsing document content..."}
-                    </p>
+                    {documentTextError ? (
+                      <div className="text-rose-400 font-semibold block bg-rose-500/10 p-4 rounded-xl border border-rose-500/20 font-sans">
+                        Error loading document text: {documentTextError}
+                      </div>
+                    ) : documentText ? (
+                      <div className="space-y-4">
+                        {renderFormattedText(documentText, readerFontSize, readerAlign)}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-400 leading-relaxed font-sans animate-pulse">
+                        Parsing document content...
+                      </div>
+                    )}
 
                     {/* Selection Highlight Popover Insight Button */}
                     {popoverCoords && (
