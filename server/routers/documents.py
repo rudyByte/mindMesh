@@ -7,11 +7,11 @@ from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException,
 from pydantic import BaseModel
 from pypdf import PdfReader
 
-from utils.neo4j_client import neo4j_client
-from utils.supabase_client import supabase_client
-from utils.llm_client import llm_client, calculate_entity_quality, singularize_concept_name, normalize_and_clean_concept_name
-from utils.sequence_parser import parse_learning_sequences
-from utils.text_cleaner import clean_pdf_text_from_bytes
+from server.utils.neo4j_client import neo4j_client
+from server.utils.supabase_client import supabase_client
+from server.utils.llm_client import llm_client, calculate_entity_quality, singularize_concept_name, normalize_and_clean_concept_name
+from server.utils.sequence_parser import parse_learning_sequences
+from server.utils.text_cleaner import clean_pdf_text_from_bytes
 import re
 
 router = APIRouter()
@@ -348,8 +348,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             all_nodes = [n for n in all_nodes if calculate_entity_quality(n.get("name", ""), n.get("label", "Concept")) > 0.7]
 
         # Check multi-document mode config
-        from config import config
-        multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False) or (session_id is not None)
+        from server.config import config
+        multi_doc_mode = False # Force database wipe on every new document upload to guarantee isolation
 
         if not multi_doc_mode:
             # Clear all cached data, previous uploads, embeddings, vector-store entries, and session memory
@@ -358,9 +358,9 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 if k != doc_id:
                     extraction_status_cache.pop(k, None)
             
-            # Clear files from storage
+            # Clear files from storage (except the current document)
             try:
-                supabase_client.clear_bucket("documents")
+                supabase_client.clear_bucket("documents", exclude_prefix=f"{doc_id}_")
             except Exception as e:
                 logger.error(f"Failed to clear storage bucket: {e}")
 
@@ -770,7 +770,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             node_id = str(uuid.uuid4())
             
             # Check multi-document mode config
-            from config import config
+            from server.config import config
             multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False) or (session_id is not None)
 
             # Neo4j query
@@ -1078,7 +1078,7 @@ async def upload_document(
         file_bytes = await file.read()
 
         # Clear state if not multi-document mode
-        from config import config
+        from server.config import config
         multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False) or (session_id is not None)
         if not multi_doc_mode:
             extraction_status_cache.clear()
@@ -1195,7 +1195,7 @@ def get_document_graph(id: str, session_id: Optional[str] = Query(None)):
             if res and res[0].get("session_id") != session_id:
                 raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
 
-    from config import config
+    from server.config import config
     multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False)
 
     if neo4j_client.is_mock():
@@ -1382,12 +1382,21 @@ def get_document_text(id: str, session_id: Optional[str] = Query(None)):
         path = f"uploads/{id}_{title}"
         file_bytes = supabase_client.download_file("documents", path)
         
-        from utils.text_cleaner import clean_pdf_text_from_bytes
-        text, _ = clean_pdf_text_from_bytes(file_bytes)
-        return {"text": text}
+        from server.utils.text_cleaner import stream_clean_pdf_text_from_bytes
+        from fastapi.responses import StreamingResponse
+        
+        def text_generator():
+            try:
+                for chunk in stream_clean_pdf_text_from_bytes(file_bytes, chunk_size=10):
+                    yield chunk
+            except Exception as e:
+                logger.error(f"Failed to parse PDF bytes mid-stream for document {id}: {e}")
+                yield f"\n\n[Error: Failed to finish parsing document: {str(e)}]\n"
+                
+        return StreamingResponse(text_generator(), media_type="text/plain")
     except Exception as e:
-        logger.error(f"Failed to fetch or parse PDF bytes for document {id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch or parse document text: {str(e)}")
+        logger.error(f"Failed to fetch PDF bytes for document {id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch document: {str(e)}")
 
 @router.delete("/sessions/{session_id}")
 def delete_session_data(session_id: str):

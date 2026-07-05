@@ -24,6 +24,8 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const setSelectedNode = useStore((state) => state.setSelectedNode);
   const sessionId = useStore((state) => state.sessionId);
   const activeDocumentId = useStore((state) => state.activeDocumentId);
+  const setGraphFilter = useStore((state) => state.setGraphFilter);
+  const reloadSessionData = useStore((state) => state.reloadSessionData);
   const documents = useStore((state) => state.documents);
   const removeDocument = useStore((state) => state.removeDocument);
   const replaceTargetDocId = useStore((state) => state.replaceTargetDocId);
@@ -187,41 +189,16 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
           // Clear frontend graph state before rendering the new graph
           setGraphData({ nodes: [], edges: [] });
           
-          // Fetch and load graph
-          const graphUrl = sessionId
-            ? `${API_BASE_URL}/sessions/${sessionId}/graph`
-            : `${API_BASE_URL}/documents/${docId}/graph`;
-          const graphResponse = await fetch(graphUrl);
-          if (graphResponse.ok) {
-            const graphData = await graphResponse.json();
-            
-            let validatedNodes = graphData.nodes || [];
-            let validatedEdges = graphData.edges || [];
-
-            if (!sessionId) {
-              // Validate that no nodes from previous documents exist in graphData
-              validatedNodes = (graphData.nodes || []).filter((node: any) => {
-                return !node.doc_id || node.doc_id === docId;
-              });
-              const validatedNodeIds = new Set(validatedNodes.map((n: any) => n.id));
-              validatedEdges = (graphData.edges || []).filter((edge: any) => {
-                const fromId = typeof edge.source === 'object' ? edge.source.id : edge.source || edge.from;
-                const toId = typeof edge.target === 'object' ? edge.target.id : edge.target || edge.to;
-                return validatedNodeIds.has(fromId) && validatedNodeIds.has(toId);
-              });
-            }
-
-            setGraphData({
-              nodes: validatedNodes,
-              edges: validatedEdges
-            });
-
-            // Automatically select the central Topic node of the newly uploaded document
-            const topicNode = validatedNodes.find((n: any) => n.label === 'Topic');
-            if (topicNode) {
-              setSelectedNode(topicNode);
-            }
+          // Trigger the same graph fetch/filter function used by the "All Nodes" dropdown
+          setGraphFilter(null);
+          if (sessionId) {
+            await reloadSessionData(sessionId);
           }
+          
+          // Wait 400ms then auto-close
+          setTimeout(() => {
+            handleClose();
+          }, 400);
         } else if (status === 'error') {
           setUploadState('error');
           setErrorMsg(error || 'Graph extraction failed.');

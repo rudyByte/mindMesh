@@ -39,13 +39,10 @@ def get_json(url):
 
 def main():
     root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    doc_dir = os.path.join(root_dir, "mock_storage", "documents")
-    pdf_files = [f for f in os.listdir(doc_dir) if f.endswith(".pdf")]
-    if not pdf_files:
-        print("Error: No PDF files found in mock_storage/documents to upload.")
+    pdf_path = os.path.join(root_dir, "web", "public", "IoT_Document.pdf")
+    if not os.path.exists(pdf_path):
+        print(f"Error: {pdf_path} not found.")
         return
-        
-    pdf_path = os.path.join(doc_dir, pdf_files[0])
     url = "http://localhost:8000/documents/upload"
     
     print(f"Uploading {pdf_path} to {url}...")
@@ -85,6 +82,15 @@ def main():
                     print(f"  - Isolated node: {node['name']} ({node['label']})")
         else:
             print("SUCCESS: Zero isolated nodes! The knowledge graph is fully unified and interconnected.")
+            
+        # Verify text extraction endpoint
+        text_url = f"http://localhost:8000/documents/{doc_id}/text"
+        print(f"Fetching text from {text_url}...")
+        req = urllib.request.Request(text_url, method='GET')
+        with urllib.request.urlopen(req) as res:
+            text_data = res.read().decode('utf-8')
+            print(f"SUCCESS: Extracted text length: {len(text_data)} characters")
+            print(f"Sample: {text_data[:100]}...")
             
     except Exception as e:
         print(f"Error during execution: {e}")

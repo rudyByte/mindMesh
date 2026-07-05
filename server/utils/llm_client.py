@@ -2,7 +2,7 @@ import json
 import logging
 import re
 from anthropic import Anthropic
-from config import config
+from server.config import config
 
 logger = logging.getLogger("llm_client")
 

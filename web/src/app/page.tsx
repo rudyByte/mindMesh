@@ -98,8 +98,21 @@ export default function DashboardPage() {
       try {
         const response = await fetch(`${API_BASE_URL}/documents/${activeDocumentId}/text`);
         if (response.ok) {
-          const data = await response.json();
-          setDocumentText(data.text);
+          if (response.body) {
+            setDocumentText('');
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let streamedText = '';
+            
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              streamedText += decoder.decode(value, { stream: true });
+              setDocumentText(streamedText);
+            }
+          } else {
+            setDocumentText(await response.text());
+          }
         } else {
           setDocumentTextError(`HTTP Error ${response.status}: ${response.statusText}`);
         }
@@ -135,7 +148,7 @@ export default function DashboardPage() {
     if (!selectedText || !activeDocumentId || !sessionId) return;
 
     try {
-      const response = await fetch(`${API_BASE_URL}/highlights?session_id=${sessionId}`, {
+      const response = await fetch(`${API_BASE_URL}/highlights?document_id=${activeDocumentId}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -165,7 +178,7 @@ export default function DashboardPage() {
         setPopoverCoords(null);
 
         // Fetch and load updated document graph elements to canvas
-        const graphResponse = await fetch(`${API_BASE_URL}/sessions/${sessionId}/graph`);
+        const graphResponse = await fetch(`${API_BASE_URL}/documents/${activeDocumentId}/graph`);
         if (graphResponse.ok) {
           const graphData = await graphResponse.json();
           useStore.getState().appendGraphData(graphData);
@@ -205,55 +218,55 @@ export default function DashboardPage() {
         {/* Center flexible canvas area */}
         <div className="mission-stage flex-1 h-full relative flex flex-col">
           {/* Unified Horizontal Toolbar HUD */}
-          {activeDocumentId && (
-            <div className="absolute top-4 left-4 right-4 z-20 flex justify-center pointer-events-none px-2">
-              <div className="view-switcher flex items-center p-1 md:p-1.5 gap-1 md:gap-1.5 pointer-events-auto overflow-x-auto no-scrollbar max-w-full !bg-[#E8F9FD] !border-[#69D2E7]">
-                
-                {activeTab === 'map' && (
-                  <>
-                    <button
-                      onClick={() => setGraphMode('basic')}
-                      data-active={graphMode === 'basic'}
-                      className="px-2 py-1.5 text-[11px] font-bold rounded flex items-center justify-center gap-1 transition-all cursor-pointer whitespace-nowrap shrink-0"
-                    >
-                      <Compass className="w-3.5 h-3.5 hidden sm:block" />
-                      Prerequisites
-                    </button>
-                    
-                    <button
-                      onClick={() => setGraphMode('advanced')}
-                      data-active={graphMode === 'advanced'}
-                      className="px-2 py-1.5 text-[11px] font-bold rounded flex items-center justify-center gap-1 transition-all cursor-pointer whitespace-nowrap shrink-0"
-                    >
-                      <Layers className="w-3.5 h-3.5 hidden sm:block" />
-                      Related & Extends
-                    </button>
+          <div className="absolute top-4 left-4 right-4 z-20 flex justify-center pointer-events-none px-2">
+            <div className="view-switcher flex items-center p-1 md:p-1.5 gap-1 md:gap-1.5 pointer-events-auto overflow-x-auto no-scrollbar max-w-full !bg-[#E8F9FD] !border-[#69D2E7]">
+              
+              {activeTab === 'map' && (
+                <>
+                  <button
+                    onClick={() => setGraphMode('basic')}
+                    data-active={graphMode === 'basic'}
+                    className="px-2 py-1.5 text-[11px] font-bold rounded flex items-center justify-center gap-1 transition-all cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Compass className="w-3.5 h-3.5 hidden sm:block" />
+                    Prerequisites
+                  </button>
+                  
+                  <button
+                    onClick={() => setGraphMode('advanced')}
+                    data-active={graphMode === 'advanced'}
+                    className="px-2 py-1.5 text-[11px] font-bold rounded flex items-center justify-center gap-1 transition-all cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Layers className="w-3.5 h-3.5 hidden sm:block" />
+                    Related & Extends
+                  </button>
 
-                    <div className="flex items-center gap-1 mx-1 md:mx-2 border-l border-[#69D2E7] pl-1 md:pl-2 shrink-0">
-                      <span className="text-[11px] font-bold text-gray-700 mr-1 whitespace-nowrap">Traversal</span>
-                      {[1, 2, 3].map((depth) => (
-                        <button
-                          key={depth}
-                          data-active={graphDepth === depth}
-                          onClick={() => setGraphDepth(depth)}
-                          className="w-6 h-6 md:w-7 md:h-7 text-[11px] font-bold rounded flex items-center justify-center transition-all cursor-pointer shrink-0 bg-white border border-[#69D2E7]"
-                        >
-                          {depth}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
+                  <div className="flex items-center gap-1 mx-1 md:mx-2 border-l border-[#69D2E7] pl-1 md:pl-2 shrink-0">
+                    <span className="text-[11px] font-bold text-gray-700 mr-1 whitespace-nowrap">Traversal</span>
+                    {[1, 2, 3].map((depth) => (
+                      <button
+                        key={depth}
+                        data-active={graphDepth === depth}
+                        onClick={() => setGraphDepth(depth)}
+                        className="w-6 h-6 md:w-7 md:h-7 text-[11px] font-bold rounded flex items-center justify-center transition-all cursor-pointer shrink-0 bg-white border border-[#69D2E7]"
+                      >
+                        {depth}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
 
-                <button
-                  onClick={() => setActiveTab('map')}
-                  data-active={activeTab === 'map'}
-                  className="px-3 py-1.5 text-xs font-bold rounded flex items-center justify-center gap-1.5 transition-all cursor-pointer whitespace-nowrap shrink-0 ml-1"
-                >
-                  <MapIcon className="w-3.5 h-3.5" />
-                  Visual Map
-                </button>
-                
+              <button
+                onClick={() => setActiveTab('map')}
+                data-active={activeTab === 'map'}
+                className="px-3 py-1.5 text-xs font-bold rounded flex items-center justify-center gap-1.5 transition-all cursor-pointer whitespace-nowrap shrink-0 ml-1"
+              >
+                <MapIcon className="w-3.5 h-3.5" />
+                Visual Map
+              </button>
+              
+              {activeDocumentId && (
                 <button
                   onClick={() => setActiveTab('text')}
                   data-active={activeTab === 'text'}
@@ -262,9 +275,9 @@ export default function DashboardPage() {
                   <FileText className="w-3.5 h-3.5" />
                   Document Text
                 </button>
-              </div>
+              )}
             </div>
-          )}
+          </div>
 
           {/* Main Tab Render */}
           <div className="flex-1 min-h-0 relative">

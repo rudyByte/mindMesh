@@ -194,10 +194,10 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
 
   // Fetch notes on load and document change
   useEffect(() => {
-    if (!sessionId) return;
+    if (!activeDocumentId) return;
     const fetchNotes = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/notes?session_id=${sessionId}`);
+        const response = await fetch(`${API_BASE_URL}/notes?document_id=${activeDocumentId}`);
         if (response.ok) {
           const data = await response.json();
           setNotes(data);
@@ -215,11 +215,11 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
 
   // Fetch citations on load and document change
   useEffect(() => {
-    if (!sessionId) return;
+    if (!activeDocumentId) return;
     const fetchCitations = async () => {
       setCitationsLoading(true);
       try {
-        const response = await fetch(`${API_BASE_URL}/citations?session_id=${sessionId}`);
+        const response = await fetch(`${API_BASE_URL}/citations?document_id=${activeDocumentId}`);
         if (response.ok) {
           const data = await response.json();
           setCitations(data);
@@ -240,16 +240,14 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const handleDocumentSelect = async (docId: string) => {
     setActiveDocumentId(docId);
     try {
-      const url = sessionId
-        ? `${API_BASE_URL}/sessions/${sessionId}/graph`
-        : `${API_BASE_URL}/documents/${docId}/graph`;
+      const url = `${API_BASE_URL}/documents/${docId}/graph`;
       const response = await fetch(url);
       if (response.ok) {
         const data = await response.json();
         setGraphData(data);
 
         // Automatically select the central Topic node of the selected document
-        const topicNode = (data.nodes || []).find((n: any) => n.label === 'Topic' && (!sessionId || n.doc_id === docId));
+        const topicNode = (data.nodes || []).find((n: any) => n.label === 'Topic' && n.doc_id === docId);
         if (topicNode) {
           setSelectedNode(topicNode);
         } else {
@@ -264,11 +262,11 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const handleNoteSearchChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const q = e.target.value;
     setNoteSearch(q);
-    if (!sessionId) return;
+    if (!activeDocumentId) return;
     try {
       const url = q.trim()
-        ? `${API_BASE_URL}/notes/search?q=${encodeURIComponent(q)}&session_id=${sessionId}`
-        : `${API_BASE_URL}/notes?session_id=${sessionId}`;
+        ? `${API_BASE_URL}/notes/search?q=${encodeURIComponent(q)}&document_id=${activeDocumentId}`
+        : `${API_BASE_URL}/notes?document_id=${activeDocumentId}`;
       const response = await fetch(url);
       if (response.ok) {
         const data = await response.json();
@@ -284,10 +282,10 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   };
 
   const handleAddNote = async () => {
-    if (!noteInput.trim() || !sessionId) return;
+    if (!noteInput.trim() || !activeDocumentId) return;
     setNoteSubmitLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/notes?session_id=${sessionId}`, {
+      const response = await fetch(`${API_BASE_URL}/notes?document_id=${activeDocumentId}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -301,7 +299,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
         setNotesError(null);
         
         // Refresh graph to show newly added Note node & links
-        const graphResponse = await fetch(`${API_BASE_URL}/sessions/${sessionId}/graph`);
+        const graphResponse = await fetch(`${API_BASE_URL}/documents/${activeDocumentId}/graph`);
         if (graphResponse.ok) {
           const graphData = await graphResponse.json();
           setGraphData(graphData);
@@ -975,9 +973,7 @@ export function RightSidebar() {
     };
     setSelectedNode(clickedNode);
     try {
-      const url = sessionId
-        ? `${API_BASE_URL}/graph/node/${stepNode.id}?session_id=${sessionId}`
-        : `${API_BASE_URL}/graph/node/${stepNode.id}?document_id=${activeDocumentId || 'doc-1'}`;
+      const url = `${API_BASE_URL}/graph/node/${stepNode.id}?document_id=${activeDocumentId || 'doc-1'}`;
       const response = await fetch(url);
       if (response.ok) {
         const detailsData = await response.json();
@@ -1012,7 +1008,6 @@ export function RightSidebar() {
           },
           body: JSON.stringify({
             node_id: selectedNode.id,
-            session_id: sessionId,
             document_id: activeDocumentId || 'doc-1'
           }),
         });
@@ -1056,7 +1051,6 @@ export function RightSidebar() {
           node_id: selectedNode?.id || null,
           conversation_history: chatMessages.slice(-10).map(m => ({ role: m.role, content: m.content })),
           user_role: user?.role || 'student',
-          session_id: sessionId,
           document_id: activeDocumentId || 'doc-1'
         }),
       });

@@ -1,6 +1,6 @@
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
-from utils.neo4j_client import neo4j_client
+from server.utils.neo4j_client import neo4j_client
 
 router = APIRouter()
 

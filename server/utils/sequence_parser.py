@@ -1,5 +1,5 @@
 import re
-from utils.llm_client import calculate_entity_quality, normalize_and_clean_concept_name
+from server.utils.llm_client import calculate_entity_quality, normalize_and_clean_concept_name
 
 def is_valid_concept_name(name: str) -> bool:
     name_clean = name.strip()

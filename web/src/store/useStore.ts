@@ -474,35 +474,51 @@ export const useStore = create<AppState>((set) => ({
         activeDocumentId: nextActiveId 
       });
 
-      // 1. Fetch graph
-      const graphRes = await fetch(`${API_BASE_URL}/sessions/${id}/graph`);
-      if (graphRes.ok) {
-        const data = await graphRes.json();
-        set({ nodes: data.nodes || [], edges: data.edges || [] });
+      // 1. Fetch graph (document-specific)
+      if (nextActiveId) {
+        const graphRes = await fetch(`${API_BASE_URL}/documents/${nextActiveId}/graph`);
+        if (graphRes.ok) {
+          const data = await graphRes.json();
+          set({ nodes: data.nodes || [], edges: data.edges || [] });
+        }
+      } else {
+        set({ nodes: [], edges: [] });
       }
 
       // 2. Fetch notes
-      const notesRes = await fetch(`${API_BASE_URL}/notes?session_id=${id}`);
-      if (notesRes.ok) {
-        const data = await notesRes.json();
-        set({ notes: data || [] });
-        saveSessionLocal(id, { notes: data || [] });
+      if (nextActiveId) {
+        const notesRes = await fetch(`${API_BASE_URL}/notes?document_id=${nextActiveId}`);
+        if (notesRes.ok) {
+          const data = await notesRes.json();
+          set({ notes: data || [] });
+          saveSessionLocal(id, { notes: data || [] });
+        }
+      } else {
+        set({ notes: [] });
       }
 
       // 3. Fetch highlights
-      const highlightsRes = await fetch(`${API_BASE_URL}/highlights?session_id=${id}`);
-      if (highlightsRes.ok) {
-        const data = await highlightsRes.json();
-        set({ highlights: data || [] });
-        saveSessionLocal(id, { highlights: data || [] });
+      if (nextActiveId) {
+        const highlightsRes = await fetch(`${API_BASE_URL}/highlights?document_id=${nextActiveId}`);
+        if (highlightsRes.ok) {
+          const data = await highlightsRes.json();
+          set({ highlights: data || [] });
+          saveSessionLocal(id, { highlights: data || [] });
+        }
+      } else {
+        set({ highlights: [] });
       }
 
       // 4. Fetch citations
-      const citationsRes = await fetch(`${API_BASE_URL}/citations?session_id=${id}`);
-      if (citationsRes.ok) {
-        const data = await citationsRes.json();
-        set({ citations: data || [] });
-        saveSessionLocal(id, { citations: data || [] });
+      if (nextActiveId) {
+        const citationsRes = await fetch(`${API_BASE_URL}/citations?document_id=${nextActiveId}`);
+        if (citationsRes.ok) {
+          const data = await citationsRes.json();
+          set({ citations: data || [] });
+          saveSessionLocal(id, { citations: data || [] });
+        }
+      } else {
+        set({ citations: [] });
       }
     } catch (err) {
       console.error('Failed to reload session data:', err);
@@ -560,7 +576,7 @@ export const useStore = create<AppState>((set) => ({
   activeDocumentId: null,
   setActiveDocumentId: (docId) => set((state) => {
     saveSessionLocal(state.sessionId, { activeDocumentId: docId });
-    return { activeDocumentId: docId };
+    return { activeDocumentId: docId, nodes: [], edges: [] };
   }),
   documents: [],
   addDocument: (doc) => set((state) => {

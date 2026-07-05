@@ -1,7 +1,7 @@
 import os
 import logging
 from supabase import create_client, Client
-from config import config
+from server.config import config
 
 logger = logging.getLogger("supabase_client")
 
@@ -61,12 +61,14 @@ class SupabaseClientWrapper:
             logger.error(f"Failed to download file from Supabase: {e}")
             raise e
 
-    def clear_bucket(self, bucket: str):
+    def clear_bucket(self, bucket: str, exclude_prefix: str = None):
         if self._is_mock:
             root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             mock_dir = os.path.join(root_dir, "mock_storage", bucket)
             if os.path.exists(mock_dir):
                 for f in os.listdir(mock_dir):
+                    if exclude_prefix and f.startswith(exclude_prefix):
+                        continue
                     file_path = os.path.join(mock_dir, f)
                     try:
                         if os.path.isfile(file_path):
@@ -79,7 +81,14 @@ class SupabaseClientWrapper:
             # List all files in the bucket
             res = self._client.storage.from_(bucket).list(options={"limit": 100})
             if res:
-                file_names = [item["name"] for item in res if item.get("name") != ".emptyFolderPlaceholder"]
+                file_names = []
+                for item in res:
+                    name = item.get("name")
+                    if name != ".emptyFolderPlaceholder":
+                        if exclude_prefix and name.startswith(exclude_prefix):
+                            continue
+                        file_names.append(name)
+                        
                 if file_names:
                     # Remove the files
                     self._client.storage.from_(bucket).remove(file_names)

@@ -15,6 +15,23 @@ def clean_pdf_text_from_bytes(file_bytes: bytes) -> tuple[str, list[str]]:
         raw_pages.append(page.extract_text() or "")
     return clean_raw_pages(raw_pages)
 
+def stream_clean_pdf_text_from_bytes(file_bytes: bytes, chunk_size: int = 10):
+    """
+    Given PDF file bytes, parses the text page by page in chunks and yields the cleaned text chunks.
+    This prevents memory exhaustion and timeouts for large PDFs (100+ pages).
+    """
+    reader = PdfReader(io.BytesIO(file_bytes))
+    num_pages = len(reader.pages)
+    
+    for i in range(0, num_pages, chunk_size):
+        chunk_pages = []
+        for j in range(i, min(i + chunk_size, num_pages)):
+            chunk_pages.append(reader.pages[j].extract_text() or "")
+        
+        chunk_text, _ = clean_raw_pages(chunk_pages)
+        if chunk_text:
+            yield chunk_text + "\n\n"
+
 def clean_raw_pages(raw_pages: list[str]) -> tuple[str, list[str]]:
     """
     Cleans raw PDF text page-by-page.

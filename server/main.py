@@ -2,8 +2,8 @@ import os
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import health, documents, graph, copilot, highlights, notes, citations, paths
-from utils.neo4j_client import neo4j_client
+from server.routers import health, documents, graph, copilot, highlights, notes, citations, paths
+from server.utils.neo4j_client import neo4j_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")

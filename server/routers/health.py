@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from utils.neo4j_client import neo4j_client
+from server.utils.neo4j_client import neo4j_client
 
 router = APIRouter()
 
@@ -16,9 +16,9 @@ def get_graph_ping():
 
 @router.get("/health/deep")
 def get_deep_health():
-    from utils.supabase_client import supabase_client
-    from utils.llm_client import llm_client
-    from config import config
+    from server.utils.supabase_client import supabase_client
+    from server.utils.llm_client import llm_client
+    from server.config import config
     
     # 1. Neo4j Status
     try:

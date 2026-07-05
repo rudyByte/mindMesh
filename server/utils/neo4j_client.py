@@ -1,6 +1,6 @@
 import logging
 from neo4j import GraphDatabase
-from config import config
+from server.config import config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("neo4j_client")
@@ -210,6 +210,14 @@ class Neo4jClient:
         if "RETURN 1" in query_upper:
             return [{"1": 1}]
 
+        if "DETACH DELETE N" in query_upper and "MATCH" in query_upper:
+            self.mock_nodes.clear()
+            self.mock_edges.clear()
+            return []
+
+        if "COUNT(N)" in query_upper and "RETURN" in query_upper:
+            return [{"count": len(self.mock_nodes)}]
+
         # 1. Update/SET queries (e.g. status updates)
         if "SET " in query_upper and "MERGE" not in query_upper:
             doc_id = params.get("doc_id") or params.get("id")
@@ -397,30 +405,49 @@ class Neo4jClient:
                 else:
                     doc_node_ids = set(self.mock_nodes.keys())
 
-                if target_id in self.mock_nodes and target_id in doc_node_ids:
-                    nodes_to_return[target_id] = self.mock_nodes[target_id]
+                if target_id not in self.mock_nodes or target_id not in doc_node_ids:
+                    return [{"nodes": [], "edges": []}]
                 
+                visited_nodes = {target_id}
+                current_frontier = {target_id}
+                nodes_to_return = {target_id: self.mock_nodes[target_id]}
+                
+                # Pre-filter edges to only those relevant to this document/session and mode
+                valid_edges = []
                 for edge in self.mock_edges:
-                    # Keep Concept-to-Concept CONTAINS relationships, but drop Document-to-Concept ones
                     if edge["type"] == "CONTAINS" and (edge["from"] == doc_id or edge["from"] == "doc-1" or (edge["from"] in self.mock_nodes and self.mock_nodes[edge["from"]].get("label") == "Document")):
                         continue
                     if mode == "basic" and edge["type"] != "PREREQUISITE_OF":
                         continue
-                    if session_id:
-                        if edge.get("session_id") != session_id:
-                            continue
-                    elif doc_id and doc_id != "doc-1":
-                        if edge.get("doc_id") != doc_id:
-                            continue
-                            
+                    if session_id and edge.get("session_id") != session_id:
+                        continue
+                    elif doc_id and doc_id != "doc-1" and edge.get("doc_id") != doc_id:
+                        continue
                     if edge["from"] in doc_node_ids and edge["to"] in doc_node_ids:
-                        if edge["from"] == target_id or edge["to"] == target_id:
-                            from_node = self.mock_nodes.get(edge["from"])
-                            to_node = self.mock_nodes.get(edge["to"])
-                            if from_node and to_node:
-                                nodes_to_return[edge["from"]] = from_node
-                                nodes_to_return[edge["to"]] = to_node
-                                edges_to_return.append(edge)
+                        valid_edges.append(edge)
+                
+                # BFS to expand frontier up to 'depth' hops
+                for _ in range(depth):
+                    next_frontier = set()
+                    for edge in valid_edges:
+                        if edge["from"] in current_frontier and edge["to"] not in visited_nodes:
+                            next_frontier.add(edge["to"])
+                        elif edge["to"] in current_frontier and edge["from"] not in visited_nodes:
+                            next_frontier.add(edge["from"])
+                    
+                    for nid in next_frontier:
+                        visited_nodes.add(nid)
+                        nodes_to_return[nid] = self.mock_nodes[nid]
+                    
+                    current_frontier = next_frontier
+                    if not current_frontier:
+                        break
+                
+                # Collect all edges that exist completely within the visited subgraph
+                edges_to_return = []
+                for edge in valid_edges:
+                    if edge["from"] in visited_nodes and edge["to"] in visited_nodes:
+                        edges_to_return.append(edge)
 
                 return [{"nodes": list(nodes_to_return.values()), "edges": edges_to_return}]
 

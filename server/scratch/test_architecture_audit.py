@@ -9,8 +9,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(1, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))) # project root
 
 from main import app
-from utils.neo4j_client import neo4j_client
-from routers.documents import run_extraction_pipeline, extraction_status_cache
+from server.utils.neo4j_client import neo4j_client
+from server.routers.documents import run_extraction_pipeline, extraction_status_cache
 
 client = TestClient(app)
 

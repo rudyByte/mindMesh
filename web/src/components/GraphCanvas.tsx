@@ -190,16 +190,14 @@ export default function GraphCanvas() {
   // Keep traversal controls live. Replace the neighborhood so reducing depth
   // contracts the graph instead of leaving previously appended nodes behind.
   useEffect(() => {
-    if (!selectedNodeId || (!sessionId && !activeDocumentId)) return;
+    if (!selectedNodeId || !activeDocumentId) return;
 
     const controller = new AbortController();
     const expandSelectedNode = async () => {
       setLoading(true);
       setCanvasError(null);
       try {
-        const scope = sessionId
-          ? `session_id=${encodeURIComponent(sessionId)}`
-          : `document_id=${encodeURIComponent(activeDocumentId || '')}`;
+        const scope = `document_id=${encodeURIComponent(activeDocumentId || '')}`;
         const response = await fetch(
           `${API_BASE_URL}/graph/expand?node_id=${encodeURIComponent(selectedNodeId)}&depth=${graphDepth}&mode=${graphMode}&${scope}`,
           { signal: controller.signal }
@@ -221,7 +219,7 @@ export default function GraphCanvas() {
 
     expandSelectedNode();
     return () => controller.abort();
-  }, [selectedNodeId, graphDepth, graphMode, sessionId, activeDocumentId, setGraphData]);
+  }, [selectedNodeId, graphDepth, graphMode, activeDocumentId, setGraphData]);
 
   // Focus/zoom camera when selectedNode changes
   useEffect(() => {
@@ -267,15 +265,15 @@ export default function GraphCanvas() {
     return () => window.removeEventListener('resize', updateDimensions);
   }, []);
 
-  // Fetch session graph when sessionId changes if not already loaded
+  // Fetch document graph when activeDocumentId changes if not already loaded
   useEffect(() => {
-    const fetchSessionGraph = async () => {
-      if (!sessionId) return;
+    const fetchGraph = async () => {
+      if (!activeDocumentId) return;
       if (nodes.length > 0) return; // Skip if already loaded by store
       setLoading(true);
       setCanvasError(null);
       try {
-        const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/graph`);
+        const response = await fetch(`${API_BASE_URL}/documents/${activeDocumentId}/graph`);
         if (response.ok) {
           const data = await response.json();
           setGraphData(data);
@@ -283,15 +281,15 @@ export default function GraphCanvas() {
           setCanvasError(`HTTP Error ${response.status}: ${response.statusText}`);
         }
       } catch (err: any) {
-        console.error('Failed to load session graph', err);
+        console.error('Failed to load document graph', err);
         setCanvasError(err.message || 'API connection failed');
       } finally {
         setLoading(false);
       }
     };
 
-    fetchSessionGraph();
-  }, [sessionId, setGraphData, nodes.length]);
+    fetchGraph();
+  }, [activeDocumentId, setGraphData, nodes.length]);
 
   const nodeDegrees = React.useMemo(() => {
     const degrees: Record<string, number> = {};
@@ -393,9 +391,7 @@ export default function GraphCanvas() {
     setSelectedNode(clickedNode);
     try {
       // Fetch full details of the clicked node
-      const detailsUrl = sessionId
-        ? `${API_BASE_URL}/graph/node/${node.id}?session_id=${sessionId}`
-        : `${API_BASE_URL}/graph/node/${node.id}?document_id=${activeDocumentId || 'doc-1'}`;
+      const detailsUrl = `${API_BASE_URL}/graph/node/${node.id}?document_id=${activeDocumentId || 'doc-1'}`;
       const detailsRes = await fetch(detailsUrl);
       if (detailsRes.ok) {
         const detailsData = await detailsRes.json();
@@ -444,9 +440,7 @@ export default function GraphCanvas() {
               setCanvasError(null);
               setLoading(true);
               try {
-                const graphUrl = sessionId
-                  ? `${API_BASE_URL}/sessions/${sessionId}/graph`
-                  : `${API_BASE_URL}/documents/${activeDocumentId || 'doc-1'}/graph`;
+                const graphUrl = `${API_BASE_URL}/documents/${activeDocumentId || 'doc-1'}/graph`;
                 const response = await fetch(graphUrl);
                 if (response.ok) {
                   const data = await response.json();
