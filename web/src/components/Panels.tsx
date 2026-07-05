@@ -10,6 +10,67 @@ import {
   Copy, Check, Bookmark, X, ChevronRight, ChevronLeft, Send, Trash, Loader2, RefreshCw
 } from 'lucide-react';
 
+// ==================== HELPER ====================
+function generateTopologicalLearningPath(nodes: GraphNode[], edges: any[], activeDocumentId: string | null) {
+  if (!activeDocumentId) return [];
+
+  const docNodes = nodes.filter(n => n.label === 'Concept' && n.doc_id === activeDocumentId);
+  
+  const adj: Record<string, string[]> = {};
+  const inDegree: Record<string, number> = {};
+  
+  docNodes.forEach(n => { 
+    adj[n.id] = []; 
+    inDegree[n.id] = 0; 
+  });
+  
+  const docNodeIds = new Set(docNodes.map(n => n.id));
+
+  edges.forEach(e => {
+    if (e.type === 'PREREQUISITE_OF' || e.type === 'REQUIRES') {
+      const src = typeof e.source === 'object' ? e.source.id : e.source || e.from;
+      const tgt = typeof e.target === 'object' ? e.target.id : e.target || e.to;
+      if (docNodeIds.has(src) && docNodeIds.has(tgt)) {
+         adj[src].push(tgt);
+         inDegree[tgt]++;
+      }
+    }
+  });
+
+  const levels: Record<string, number> = {};
+  const queue: string[] = docNodes.filter(n => inDegree[n.id] === 0).map(n => n.id);
+  
+  queue.forEach(id => { levels[id] = 0; });
+  
+  while (queue.length > 0) {
+    const u = queue.shift()!;
+    const currLevel = levels[u];
+    adj[u].forEach(v => {
+      inDegree[v]--;
+      levels[v] = Math.max(levels[v] || 0, currLevel + 1);
+      if (inDegree[v] === 0) {
+        queue.push(v);
+      }
+    });
+  }
+
+  docNodes.forEach(n => {
+    if (inDegree[n.id] > 0) {
+       levels[n.id] = levels[n.id] || 0;
+    }
+  });
+
+  const basics = docNodes.filter(n => levels[n.id] === 0);
+  const intermediate = docNodes.filter(n => levels[n.id] === 1);
+  const advanced = docNodes.filter(n => levels[n.id] >= 2);
+
+  return [
+    { title: 'Basics', items: basics },
+    { title: 'Intermediate', items: intermediate },
+    { title: 'Advanced', items: advanced }
+  ].filter(section => section.items.length > 0);
+}
+
 // ==================== LEFT SIDEBAR ====================
 // ==================== LEFT SIDEBAR ====================
 interface LeftSidebarProps {
@@ -25,6 +86,16 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
   const graphFilter = useStore((state) => state.graphFilter);
   const setGraphFilter = useStore((state) => state.setGraphFilter);
   const nodes = useStore((state) => state.nodes);
+  const edges = useStore((state) => state.edges);
+  
+  // Topological Learning Path state
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  const [learningPathProgress, setLearningPathProgress] = useState<Record<string, 'Not Started' | 'In Progress' | 'Completed'>>({});
+  
+  const learningPathSections = React.useMemo(() => {
+    return generateTopologicalLearningPath(nodes, edges, activeDocumentId);
+  }, [nodes, edges, activeDocumentId]);
+
   const selectedNode = useStore((state) => state.selectedNode);
   const setSelectedNode = useStore((state) => state.setSelectedNode);
   const deleteDocument = useStore((state) => state.deleteDocument);
@@ -246,6 +317,11 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
     }
   };
 
+  const activeDocForCount = activeDocumentId ? documents.find(d => d.id === activeDocumentId) : null;
+  const docPapersCount = activeDocumentId 
+    ? nodes.filter(n => n.label === 'Paper' && n.doc_id === activeDocumentId && n.name !== activeDocForCount?.title).length
+    : 0;
+
   return (
     <aside className="mission-sidebar mission-sidebar-left w-60 h-full flex flex-col select-none">
       {/* Brand Logo */}
@@ -357,7 +433,7 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
               : 'text-slate-500 hover:text-slate-300 hover:bg-[#061211]/20'
           }`}
         >
-          Citations ({citations.length})
+          Citations ({docPapersCount})
         </button>
       </div>
 
@@ -440,6 +516,83 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
                 <MapIcon className="w-4 h-4" />
                 Learning Paths
               </a>
+              {graphFilter === 'Learning Path' && (
+                <div className="pl-6 pr-2 py-2 space-y-1.5 max-h-64 overflow-y-auto scrollbar-thin bg-cyan-950/5 rounded-lg border border-cyan-500/5 mt-1 animate-fadeIn">
+                  {nodes.length === 0 ? (
+                    <div className="text-[10px] text-slate-500 italic p-1.5">
+                      Upload a document to generate a learning path.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {learningPathSections.length === 0 ? (
+                        <div className="text-[10px] text-slate-500 italic p-1.5">No concepts found for this document.</div>
+                      ) : (
+                        learningPathSections.map((section, idx) => {
+                          const isCollapsed = collapsedSections[section.title];
+                          return (
+                            <div key={section.title} className="space-y-1">
+                              <div 
+                                className="text-[9px] font-mono font-bold text-cyan-500/70 uppercase tracking-widest px-1 flex items-center justify-between cursor-pointer hover:text-cyan-400 transition-colors"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCollapsedSections(prev => ({ ...prev, [section.title]: !prev[section.title] }));
+                                }}
+                              >
+                                <span>{idx + 1}. {section.title}</span>
+                                {isCollapsed ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+                              </div>
+                              {!isCollapsed && (
+                                <div className="space-y-1 pl-1 border-l border-cyan-500/20 ml-2">
+                                  {section.items.map(item => {
+                                    const isSelected = selectedNode?.id === item.id;
+                                    const status = learningPathProgress[item.id] || 'Not Started';
+                                    
+                                    // Status colors
+                                    let statusColor = 'text-slate-500';
+                                    if (status === 'In Progress') statusColor = 'text-amber-400';
+                                    if (status === 'Completed') statusColor = 'text-emerald-400';
+
+                                    return (
+                                      <div
+                                        key={item.id}
+                                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-[10px] font-bold tracking-wide transition-all duration-150 flex flex-col gap-1.5 border ${
+                                          isSelected
+                                            ? 'bg-cyan-950/50 text-cyan-300 border-cyan-500/30 shadow-[0_0_12px_rgba(20,184,166,0.15)] font-extrabold'
+                                            : 'bg-transparent text-slate-400 hover:text-cyan-300 border-transparent hover:bg-cyan-950/20 hover:border-cyan-500/10'
+                                        }`}
+                                      >
+                                        <div 
+                                          className="flex items-center gap-1.5 cursor-pointer"
+                                          onClick={() => setSelectedNode(item)}
+                                        >
+                                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${status === 'Completed' ? 'bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.5)]' : status === 'In Progress' ? 'bg-amber-500' : 'bg-slate-600'}`}></span>
+                                          <span className="truncate flex-1">{item.name}</span>
+                                        </div>
+                                        {/* Status Dropdown */}
+                                        <div className="flex items-center gap-1 pl-3">
+                                          <select 
+                                            value={status}
+                                            onChange={(e) => setLearningPathProgress(prev => ({ ...prev, [item.id]: e.target.value as any }))}
+                                            className={`text-[9px] bg-transparent border border-cyan-500/20 rounded px-1 py-0.5 outline-none cursor-pointer ${statusColor} hover:border-cyan-500/50 transition-colors font-sans w-full`}
+                                          >
+                                            <option value="Not Started" className="bg-[#030c0b] text-slate-400">Not Started</option>
+                                            <option value="In Progress" className="bg-[#030c0b] text-amber-400">In Progress</option>
+                                            <option value="Completed" className="bg-[#030c0b] text-emerald-400">Completed</option>
+                                          </select>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </nav>
 
             {/* Documents Queue */}
@@ -614,68 +767,81 @@ export function LeftSidebar({ onOpenUpload }: LeftSidebarProps) {
         )}
 
         {activeNavTab === 'citations' && (
-          /* Citations Library (Sprint 5) */
           <div className="p-3 space-y-4">
             <div className="space-y-2.5">
-              <div className="text-[9px] text-cyan-500/60 font-mono font-bold tracking-widest uppercase">Saved Citations</div>
-              {citationsError ? (
-                <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-[10px] text-rose-400 font-semibold leading-normal font-sans">
-                  <p className="font-bold flex items-center gap-1">⚠️ Connection Error</p>
-                  <p className="font-mono text-[9px] mt-0.5 opacity-90">{citationsError}</p>
-                </div>
-              ) : citationsLoading ? (
-                <div className="space-y-2.5">
-                  {[1, 2, 3].map((i) => (
-                    <div key={i} className="p-3 rounded-lg bg-cyan-950/10 border border-cyan-500/5 space-y-2.5 animate-pulse">
-                      <div className="w-12 h-3 bg-slate-800 rounded" />
-                      <div className="w-24 h-2 bg-slate-800 rounded" />
-                      <div className="w-full h-8 bg-[#030c0b]/40 rounded border border-cyan-500/5" />
+              <div className="text-[9px] text-cyan-500/60 font-mono font-bold tracking-widest uppercase">Document References</div>
+              {(() => {
+                if (!activeDocumentId) return null;
+                const activeDoc = documents.find(d => d.id === activeDocumentId);
+                const docPapers = nodes.filter(n => n.label === 'Paper' && n.doc_id === activeDocumentId && n.name !== activeDoc?.title);
+                
+                if (docPapers.length === 0) {
+                  return (
+                    <div className="text-center py-6 text-[10px] text-slate-500 border border-dashed border-cyan-950 rounded-lg font-medium">
+                      No citations found
                     </div>
-                  ))}
-                </div>
-              ) : citations.length === 0 ? (
-                <div className="text-center py-6 text-[10px] text-slate-500 border border-dashed border-cyan-950 rounded-lg font-medium">
-                  No citations saved yet. Select a Paper node to format and save a citation.
-                </div>
-              ) : (
-                <div className="space-y-2.5">
-                  {citations.map((cit) => (
-                    <div key={cit.id} className="p-3 rounded-lg bg-cyan-950/10 border border-cyan-500/5 space-y-2 relative group hover:border-cyan-500/15 transition-all">
-                      <div className="flex items-center justify-between">
-                        <span className="bg-cyan-500/10 text-cyan-300 border border-cyan-500/15 px-1.5 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider">
-                          {cit.style}
-                        </span>
-                        <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(cit.formatted_text);
-                            setCopiedCitationId(cit.id);
-                            setTimeout(() => setCopiedCitationId(null), 2000);
-                          }}
-                          className="text-[9px] font-bold text-slate-500 hover:text-cyan-300 transition-colors flex items-center gap-1 cursor-pointer"
+                  );
+                }
+                
+                return (
+                  <div className="space-y-2.5">
+                    {docPapers.map(paper => {
+                      // Find authors
+                      const authorEdges = edges.filter(e => e.type === 'AUTHORED_BY' && (
+                        (typeof e.source === 'object' ? e.source.id : e.source) === paper.id || 
+                        (typeof e.target === 'object' ? e.target.id : e.target) === paper.id
+                      ));
+                      const authorIds = authorEdges.map(e => {
+                        const sId = typeof e.source === 'object' ? e.source.id : e.source;
+                        const tId = typeof e.target === 'object' ? e.target.id : e.target;
+                        return sId === paper.id ? tId : sId;
+                      });
+                      const authors = nodes.filter(n => authorIds.includes(n.id) && n.label === 'Author').map(n => n.name);
+                      
+                      const authorStr = authors.length > 0 ? authors.join(', ') : '';
+                      const venueStr = paper.venue ? paper.venue : '';
+                      const yearStr = paper.year ? paper.year : '';
+                      
+                      const parts = [authorStr, venueStr, yearStr].filter(Boolean);
+                      const metaStr = parts.join(' • ');
+                      
+                      const isSelected = selectedNode?.id === paper.id;
+                      
+                      return (
+                        <div 
+                          key={paper.id} 
+                          onClick={() => setSelectedNode(paper)}
+                          className={`p-3 rounded-lg border space-y-1.5 cursor-pointer transition-all group ${
+                            isSelected 
+                              ? 'bg-cyan-950/50 border-cyan-500/30 shadow-[0_0_12px_rgba(20,184,166,0.15)]' 
+                              : 'bg-cyan-950/10 border-cyan-500/5 hover:border-cyan-500/15'
+                          }`}
                         >
-                          {copiedCitationId === cit.id ? (
-                            <>
-                              <Check className="w-3 h-3 text-emerald-400" />
-                              <span className="text-emerald-400 font-mono">Copied</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3 h-3" />
-                              <span className="font-mono">Copy</span>
-                            </>
+                          <p className={`text-[11px] font-bold font-sans leading-snug transition-colors ${isSelected ? 'text-cyan-300' : 'text-slate-300 group-hover:text-cyan-400'}`}>
+                            {paper.name}
+                          </p>
+                          {metaStr && (
+                            <p className="text-[10px] text-slate-400 font-medium font-sans">
+                              {metaStr}
+                            </p>
                           )}
-                        </button>
-                      </div>
-                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wide truncate max-w-[200px] font-sans">
-                        {cit.paper_title || 'Research Paper'}
-                      </p>
-                      <p className="text-[11px] text-slate-300 font-medium leading-relaxed bg-[#030c0b]/40 p-2 rounded border border-cyan-500/5 font-sans select-text">
-                        {cit.formatted_text}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
+                          {(paper as any).doi && (
+                            <a 
+                              href={(paper as any).doi.startsWith('http') ? (paper as any).doi : `https://doi.org/${(paper as any).doi}`}
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="text-[9px] text-cyan-500/80 hover:text-cyan-400 font-mono inline-block mt-0.5"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              DOI: {(paper as any).doi}
+                            </a>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}

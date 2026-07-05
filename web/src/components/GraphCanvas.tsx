@@ -119,8 +119,11 @@ export default function GraphCanvas() {
       return safeNodes.filter(n => n && ['Paper', 'Author'].includes(n.label));
     }
     if (graphFilter === 'Learning Path') {
-      const pathSet = new Set(activePathNodeIds || []);
-      return safeNodes.filter(n => n && pathSet.has(n.id));
+      if (activePathNodeIds && activePathNodeIds.length > 0) {
+        const pathSet = new Set(activePathNodeIds);
+        return safeNodes.filter(n => n && pathSet.has(n.id));
+      }
+      return safeNodes.filter(n => n && ['Concept', 'Topic', 'Application'].includes(n.label));
     }
     return safeNodes.filter(n => n && n.label === graphFilter);
   }, [safeNodes, graphFilter, activePathNodeIds]);
@@ -420,55 +423,6 @@ export default function GraphCanvas() {
       {/* Ambient Glowing Backlights behind densest clusters */}
       <div className="ambient-glow-cyan top-1/4 left-1/4 animate-pulse duration-[8000ms] opacity-50" />
       <div className="ambient-glow-violet bottom-1/3 right-1/3 animate-pulse duration-[12000ms] opacity-40" />
-
-      {/* Controls HUD */}
-      <div className="absolute top-4 left-4 z-10 flex flex-wrap gap-2.5 max-w-full">
-        {/* Toggle Mode */}
-        <div className="flex items-center gap-1 bg-[#031412]/80 backdrop-blur-lg border border-cyan-500/10 p-1 rounded-xl shadow-[0_0_15px_rgba(6,182,212,0.06)]">
-          <button
-            onClick={() => setGraphMode('basic')}
-            data-active={graphMode === 'basic'}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
-              graphMode === 'basic' 
-                ? 'bg-cyan-600/80 border border-cyan-400/30 text-white shadow-[0_0_10px_rgba(6,182,212,0.2)]' 
-                : 'text-cyan-400/60 hover:text-cyan-200 hover:bg-cyan-950/20'
-            }`}
-          >
-            <Compass className="w-3.5 h-3.5" />
-            Prerequisites
-          </button>
-          <button
-            onClick={() => setGraphMode('advanced')}
-            data-active={graphMode === 'advanced'}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
-              graphMode === 'advanced' 
-                ? 'bg-cyan-600/80 border border-cyan-400/30 text-white shadow-[0_0_10px_rgba(6,182,212,0.2)]' 
-                : 'text-cyan-400/60 hover:text-cyan-200 hover:bg-cyan-950/20'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            Related & Extends
-          </button>
-        </div>
-
-        {/* Depth Slider */}
-        <div className="flex items-center gap-3 bg-[#031412]/80 backdrop-blur-lg border border-cyan-500/10 px-4 py-1.5 rounded-xl shadow-[0_0_15px_rgba(6,182,212,0.06)]">
-          <span className="text-xs font-medium text-cyan-400/70">Traversal Hops:</span>
-          <div className="hop-selector" role="group" aria-label="Traversal hops">
-            {[1, 2, 3].map((depth) => (
-              <button
-                key={depth}
-                type="button"
-                aria-pressed={graphDepth === depth}
-                data-active={graphDepth === depth}
-                onClick={() => setGraphDepth(depth)}
-              >
-                {depth}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
 
       {/* Loading Overlay */}
       {loading && (

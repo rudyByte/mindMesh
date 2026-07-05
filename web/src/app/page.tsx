@@ -9,7 +9,7 @@ import UploadModal from '../components/UploadModal';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { API_BASE_URL } from '../lib/api';
-import { FileText, Map as MapIcon, Sparkles, AlignLeft, AlignJustify } from 'lucide-react';
+import { FileText, Map as MapIcon, Sparkles, AlignLeft, AlignJustify, Layers, Compass } from 'lucide-react';
 
 function renderFormattedText(text: string, fontSize: 'sm' | 'base' | 'lg', align: 'justify' | 'left') {
   if (!text) return null;
@@ -186,6 +186,11 @@ export default function DashboardPage() {
 
   const activeDocTitle = documents.find(d => d.id === activeDocumentId)?.title || 'Document';
 
+  const graphDepth = useStore((state) => state.graphDepth);
+  const setGraphDepth = useStore((state) => state.setGraphDepth);
+  const graphMode = useStore((state) => state.graphMode);
+  const setGraphMode = useStore((state) => state.setGraphMode);
+
   return (
     <>
       <ConnectionBanner />
@@ -199,33 +204,65 @@ export default function DashboardPage() {
         
         {/* Center flexible canvas area */}
         <div className="mission-stage flex-1 h-full relative flex flex-col">
-          {/* Header Tab ToggleHUD */}
+          {/* Unified Horizontal Toolbar HUD */}
           {activeDocumentId && (
-            <div className="view-switcher absolute top-4 right-4 z-20 flex items-center gap-1 p-1">
-              <button
-                onClick={() => setActiveTab('map')}
-                data-active={activeTab === 'map'}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
-                  activeTab === 'map' 
-                    ? 'bg-cyan-600/80 border border-cyan-400/30 text-white shadow-[0_0_10px_rgba(6,182,212,0.2)]' 
-                    : 'text-cyan-400/60 hover:text-cyan-200 hover:bg-cyan-950/20'
-                }`}
-              >
-                <MapIcon className="w-3.5 h-3.5" />
-                Visual Map
-              </button>
-              <button
-                onClick={() => setActiveTab('text')}
-                data-active={activeTab === 'text'}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
-                  activeTab === 'text' 
-                    ? 'bg-cyan-600/80 border border-cyan-400/30 text-white shadow-[0_0_10px_rgba(6,182,212,0.2)]' 
-                    : 'text-cyan-400/60 hover:text-cyan-200 hover:bg-cyan-950/20'
-                }`}
-              >
-                <FileText className="w-3.5 h-3.5" />
-                Document Text
-              </button>
+            <div className="absolute top-4 left-4 right-4 z-20 flex justify-center pointer-events-none px-2">
+              <div className="view-switcher flex items-center p-1 md:p-1.5 gap-1 md:gap-1.5 pointer-events-auto overflow-x-auto no-scrollbar max-w-full !bg-[#E8F9FD] !border-[#69D2E7]">
+                
+                {activeTab === 'map' && (
+                  <>
+                    <button
+                      onClick={() => setGraphMode('basic')}
+                      data-active={graphMode === 'basic'}
+                      className="px-2 py-1.5 text-[11px] font-bold rounded flex items-center justify-center gap-1 transition-all cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      <Compass className="w-3.5 h-3.5 hidden sm:block" />
+                      Prerequisites
+                    </button>
+                    
+                    <button
+                      onClick={() => setGraphMode('advanced')}
+                      data-active={graphMode === 'advanced'}
+                      className="px-2 py-1.5 text-[11px] font-bold rounded flex items-center justify-center gap-1 transition-all cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      <Layers className="w-3.5 h-3.5 hidden sm:block" />
+                      Related & Extends
+                    </button>
+
+                    <div className="flex items-center gap-1 mx-1 md:mx-2 border-l border-[#69D2E7] pl-1 md:pl-2 shrink-0">
+                      <span className="text-[11px] font-bold text-gray-700 mr-1 whitespace-nowrap">Traversal</span>
+                      {[1, 2, 3].map((depth) => (
+                        <button
+                          key={depth}
+                          data-active={graphDepth === depth}
+                          onClick={() => setGraphDepth(depth)}
+                          className="w-6 h-6 md:w-7 md:h-7 text-[11px] font-bold rounded flex items-center justify-center transition-all cursor-pointer shrink-0 bg-white border border-[#69D2E7]"
+                        >
+                          {depth}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                <button
+                  onClick={() => setActiveTab('map')}
+                  data-active={activeTab === 'map'}
+                  className="px-3 py-1.5 text-xs font-bold rounded flex items-center justify-center gap-1.5 transition-all cursor-pointer whitespace-nowrap shrink-0 ml-1"
+                >
+                  <MapIcon className="w-3.5 h-3.5" />
+                  Visual Map
+                </button>
+                
+                <button
+                  onClick={() => setActiveTab('text')}
+                  data-active={activeTab === 'text'}
+                  className="px-3 py-1.5 text-xs font-bold rounded flex items-center justify-center gap-1.5 transition-all cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  Document Text
+                </button>
+              </div>
             </div>
           )}
 

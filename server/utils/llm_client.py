@@ -405,6 +405,74 @@ class LLMClient:
             logger.error(f"Error during real LLM extraction: {e}")
             raise e
 
+    def extract_citations(self, text_block: str) -> list[dict]:
+        if self._is_mock:
+            logger.info("[MOCK] Running mock citations extraction.")
+            # Mock behavior: return a static list if bibliography is provided
+            if not text_block.strip():
+                return []
+            return [
+                {
+                    "title": "Attention Is All You Need",
+                    "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "Lukasz Kaiser", "Illia Polosukhin"],
+                    "year": 2017,
+                    "venue": "NIPS",
+                    "doi": "10.48550/arXiv.1706.03762"
+                },
+                {
+                    "title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+                    "authors": ["Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova"],
+                    "year": 2018,
+                    "venue": "NAACL-HLT",
+                    "doi": "10.48550/arXiv.1810.04805"
+                }
+            ]
+            
+        system_prompt = (
+            "You are a strict citation extraction engine. Your task is to parse a references or bibliography section from a research paper and extract each individual citation into structured JSON. "
+            "For each citation, extract the title, list of authors, year of publication, venue (e.g. conference, journal, or publisher), and DOI or URL if available. "
+            "If a field is missing, return null for that field.\n\n"
+            "Return ONLY a valid JSON array of objects matching this schema, no prose, no markdown fences:\n"
+            "[\n"
+            "  {\n"
+            "    \"title\": \"Attention Is All You Need\",\n"
+            "    \"authors\": [\"Ashish Vaswani\", \"Noam Shazeer\", \"Niki Parmar\", \"Jakob Uszkoreit\", \"Llion Jones\", \"Aidan N. Gomez\", \"Lukasz Kaiser\", \"Illia Polosukhin\"],\n"
+            "    \"year\": 2017,\n"
+            "    \"venue\": \"NIPS\",\n"
+            "    \"doi\": \"10.48550/arXiv.1706.03762\"\n"
+            "  }\n"
+            "]"
+        )
+        
+        try:
+            message = self._client.messages.create(
+                model=config.ANTHROPIC_MODEL,
+                max_tokens=4000,
+                temperature=0,
+                system=system_prompt,
+                messages=[
+                    {"role": "user", "content": f"Extract citations from this references block:\n\n{text_block}"}
+                ]
+            )
+            content = message.content[0].text.strip()
+            
+            # Clean markdown JSON fences if LLM generated them
+            if content.startswith("```json"):
+                content = content[7:]
+            if content.startswith("```"):
+                content = content[3:]
+            if content.endswith("```"):
+                content = content[:-3]
+            content = content.strip()
+            
+            data = json.loads(content)
+            if isinstance(data, list):
+                return data
+            raise ValueError("LLM returned JSON that is not a list.")
+        except Exception as e:
+            logger.error(f"Error during citations LLM extraction: {e}")
+            raise e
+
     def _run_mock_extraction(self, text_chunk: str) -> dict:
         logger.info("[MOCK] Running strictly grounded dynamic mock extraction on text chunk")
         

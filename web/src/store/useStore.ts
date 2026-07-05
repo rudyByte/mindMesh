@@ -11,6 +11,8 @@ export interface GraphNode {
   y?: number;
   doc_id?: string;
   session_id?: string;
+  year?: number | string;
+  venue?: string;
 }
 
 export interface GraphEdge {
@@ -269,7 +271,7 @@ export const useStore = create<AppState>((set) => ({
     if (typeof window === 'undefined') return;
     try {
       const storedList = localStorage.getItem('mindmesh_sessions_list');
-      let list = storedList ? JSON.parse(storedList) : [];
+      const list = storedList ? JSON.parse(storedList) : [];
       
       const newId = crypto.randomUUID();
       const newName = name || 'Untitled Session';
@@ -277,7 +279,7 @@ export const useStore = create<AppState>((set) => ({
       
       // Deduplicate
       const seenIds = new Set<string>();
-      let dedupedList = updatedList.filter((s: any) => {
+      const dedupedList = updatedList.filter((s: any) => {
         if (!s || !s.id) return false;
         if (seenIds.has(s.id)) return false;
         seenIds.add(s.id);

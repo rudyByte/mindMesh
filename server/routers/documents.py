@@ -650,39 +650,100 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                     adj[f_low].add(t_low)
                     adj[t_low].add(f_low)
                 
+        # Remove any randomly extracted Paper nodes from the chunk phase to ensure clean citations
+        canonical_nodes = [n for n in canonical_nodes if n.get("label") != "Paper"]
+        
         # Always represent the uploaded research document itself as a Paper.
-        # LLM extraction often returns only concepts from the paper body, which
-        # previously left the Papers workspace and citation tools empty.
-        if canonical_nodes and not any(n.get("label") == "Paper" for n in canonical_nodes):
-            paper_title = re.sub(r"^[0-9a-fA-F-]{36}_", "", filename)
-            paper_title = re.sub(r"\.pdf$", "", paper_title, flags=re.IGNORECASE).strip()
-            paper_node = {
-                "label": "Paper",
-                "name": paper_title or "Uploaded Research Paper",
-                "description": f"Source research paper for the extracted knowledge graph: {paper_title}.",
-                "year": None,
-                "doi": None,
-            }
-            canonical_nodes.append(paper_node)
+        paper_title = re.sub(r"^[0-9a-fA-F-]{36}_", "", filename)
+        paper_title = re.sub(r"\.pdf$", "", paper_title, flags=re.IGNORECASE).strip()
+        paper_node = {
+            "label": "Paper",
+            "name": paper_title or "Uploaded Research Paper",
+            "description": f"Source research paper for the extracted knowledge graph: {paper_title}.",
+            "year": None,
+            "doi": None,
+        }
+        canonical_nodes.append(paper_node)
 
-            concept_candidates = [
-                n for n in canonical_nodes
-                if n is not paper_node and n.get("label") in ["Topic", "Concept", "Method", "Dataset"]
-            ]
-            if concept_candidates:
-                anchor = max(
-                    concept_candidates,
-                    key=lambda n: len(adj.get(n.get("name", "").lower().strip(), set()))
-                )
-                final_relationships.append({
-                    "from": paper_node["name"],
-                    "to": anchor["name"],
-                    "type": "MENTIONS"
-                })
-                paper_key = paper_node["name"].lower().strip()
-                anchor_key = anchor["name"].lower().strip()
-                adj.setdefault(paper_key, set()).add(anchor_key)
-                adj.setdefault(anchor_key, set()).add(paper_key)
+        # Dedicated bibliography extraction
+        references_text = None
+        # Locate references section by searching for "References" or "Bibliography"
+        ref_matches = list(re.finditer(r'\n(?:(?:\d+\.?|\[\d+\]|\b(?:IX|IV|V?I{0,3}))\s*)?(?:References|Bibliography)\s*\n', text, re.IGNORECASE))
+        if ref_matches:
+            last_match = ref_matches[-1]
+            references_text = text[last_match.end():].strip()
+            # If the extracted text is too long, limit to last 25000 chars to avoid parsing appendices indefinitely
+            if len(references_text) > 25000:
+                references_text = references_text[:25000]
+
+        if references_text:
+            logger.info("Found References section, running dedicated citation extraction...")
+            try:
+                citations = llm_client.extract_citations(references_text)
+                for cit in citations:
+                    title = cit.get("title")
+                    if not title:
+                        continue
+                    
+                    cit_node = {
+                        "label": "Paper",
+                        "name": title,
+                        "description": f"Reference citation extracted from document: {title}.",
+                        "year": cit.get("year"),
+                        "venue": cit.get("venue"),
+                        "doi": cit.get("doi")
+                    }
+                    if not any(n.get("name") == title and n.get("label") == "Paper" for n in canonical_nodes):
+                        canonical_nodes.append(cit_node)
+                    
+                    final_relationships.append({
+                        "from": paper_node["name"],
+                        "to": title,
+                        "type": "CITES"
+                    })
+                    
+                    # Create Author nodes and link
+                    authors = cit.get("authors", [])
+                    if isinstance(authors, list):
+                        for author in authors:
+                            if not author:
+                                continue
+                            author_node = {
+                                "label": "Author",
+                                "name": author,
+                                "description": f"Author of the paper '{title}'.",
+                                "difficulty_level": "Beginner"
+                            }
+                            if not any(n.get("name") == author and n.get("label") == "Author" for n in canonical_nodes):
+                                canonical_nodes.append(author_node)
+                            
+                            final_relationships.append({
+                                "from": title,
+                                "to": author,
+                                "type": "AUTHORED_BY"
+                            })
+            except Exception as e:
+                logger.error(f"Failed to extract citations from bibliography: {e}")
+
+        # Ensure main document is connected to the graph if it has no citations
+        concept_candidates = [
+            n for n in canonical_nodes
+            if n is not paper_node and n.get("label") in ["Topic", "Concept", "Method", "Dataset"]
+        ]
+        if concept_candidates:
+            anchor = max(
+                concept_candidates,
+                key=lambda n: len(adj.get(n.get("name", "").lower().strip(), set()))
+            )
+            final_relationships.append({
+                "from": paper_node["name"],
+                "to": anchor["name"],
+                "type": "MENTIONS"
+            })
+            paper_key = paper_node["name"].lower().strip()
+            anchor_key = anchor["name"].lower().strip()
+            adj.setdefault(paper_key, set()).add(anchor_key)
+            adj.setdefault(anchor_key, set()).add(paper_key)
 
         # Log top extracted concepts and relationships
         logger.info("=== TOP EXTRACTED KNOWLEDGE GRAPH ELEMENTS ===")
@@ -715,26 +776,27 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             # Neo4j query
             if label == "Paper":
                 year = node.get("year")
+                venue = node.get("venue")
                 doi = node.get("doi")
                 if session_id:
                     query = """
                     MERGE (n:Paper {name: $name, session_id: $session_id})
-                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id, n.year = $year, n.doi = $doi
-                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.doi = $doi
+                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id, n.year = $year, n.venue = $venue, n.doi = $doi
+                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.venue = $venue, n.doi = $doi
                     RETURN n.id as node_id
                     """
                 elif multi_doc_mode:
                     query = """
                     MERGE (n:Paper {name: $name})
-                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id, n.year = $year, n.doi = $doi
-                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.doi = $doi
+                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id, n.year = $year, n.venue = $venue, n.doi = $doi
+                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.venue = $venue, n.doi = $doi
                     RETURN n.id as node_id
                     """
                 else:
                     query = """
                     MERGE (n:Paper {name: $name, doc_id: $doc_id})
-                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.year = $year, n.doi = $doi
-                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.doi = $doi
+                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.year = $year, n.venue = $venue, n.doi = $doi
+                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.venue = $venue, n.doi = $doi
                     RETURN n.id as node_id
                     """
             else:
@@ -770,6 +832,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 "doc_id": doc_id,
                 "session_id": session_id,
                 "year": node.get("year"),
+                "venue": node.get("venue"),
                 "doi": node.get("doi")
             })
             
