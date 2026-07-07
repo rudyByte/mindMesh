@@ -253,16 +253,38 @@ export default function GraphCanvas() {
   useEffect(() => {
     if (!containerRef.current) return;
     const updateDimensions = () => {
-      const w = containerRef.current?.clientWidth;
-      const h = containerRef.current?.clientHeight;
-      setDimensions({
-        width: typeof w === 'number' && !isNaN(w) && w > 0 ? w : 800,
-        height: typeof h === 'number' && !isNaN(h) && h > 0 ? h : 600,
-      });
+      if (containerRef.current) {
+        const w = containerRef.current.clientWidth;
+        const h = containerRef.current.clientHeight;
+        setDimensions(prev => {
+          if (prev.width !== w || prev.height !== h) {
+            // Trigger a re-center if dimensions change (e.g. sidebar toggle)
+            if (fgRef.current && typeof fgRef.current.zoomToFit === 'function') {
+              setTimeout(() => {
+                try { fgRef.current.zoomToFit(400, 140); } catch (e) {}
+              }, 50);
+            }
+            return {
+              width: typeof w === 'number' && !isNaN(w) && w > 0 ? w : 800,
+              height: typeof h === 'number' && !isNaN(h) && h > 0 ? h : 600,
+            };
+          }
+          return prev;
+        });
+      }
     };
+    
     updateDimensions();
-    window.addEventListener('resize', updateDimensions);
-    return () => window.removeEventListener('resize', updateDimensions);
+    
+    const resizeObserver = new ResizeObserver(() => {
+      updateDimensions();
+    });
+    
+    resizeObserver.observe(containerRef.current);
+    
+    return () => {
+      resizeObserver.disconnect();
+    };
   }, []);
 
   // Fetch document graph when activeDocumentId changes if not already loaded
@@ -549,7 +571,7 @@ export default function GraphCanvas() {
             onEngineStop={() => {
               if (fgRef.current && shouldZoomToFit.current && typeof fgRef.current.zoomToFit === 'function') {
                 try {
-                  fgRef.current.zoomToFit(600, 80);
+                  fgRef.current.zoomToFit(600, 140);
                 } catch (_) {}
                 shouldZoomToFit.current = false;
               }
