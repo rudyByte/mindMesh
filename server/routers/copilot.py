@@ -19,6 +19,9 @@ class ContextRequest(BaseModel):
     session_id: Optional[str] = None
     document_id: Optional[str] = None
 
+class ExplainRequest(BaseModel):
+    concept_name: str
+
 class ChatMessageSchema(BaseModel):
     role: str # 'user' or 'assistant'
     content: str
@@ -83,7 +86,7 @@ def get_node_graphrag_context(node_id: str, session_id: Optional[str] = None, do
             if edge["from"] not in allowed_node_ids or edge["to"] not in allowed_node_ids:
                 continue
 
-            if edge["to"] == node_id and edge["type"] == "PREREQUISITE_OF":
+            if edge["to"] == node_id and edge["type"] in ["PREREQUISITE_OF", "DEPENDS_ON"]:
                 from_node = neo4j_client.mock_nodes.get(edge["from"])
                 if from_node:
                     prereqs.append({"id": from_node["id"], "name": from_node.get("name", "Unknown")})
@@ -182,7 +185,7 @@ def get_node_graphrag_context(node_id: str, session_id: Optional[str] = None, do
         
         if m_label == "Paper":
             papers.append(item)
-        elif rel_type == "PREREQUISITE_OF" and not is_outgoing:
+        elif rel_type in ["PREREQUISITE_OF", "DEPENDS_ON"] and not is_outgoing:
             prereqs.append(item)
         else:
             related.append(item)
@@ -200,6 +203,11 @@ def get_copilot_context(request: ContextRequest):
     if not context.get("node"):
         raise HTTPException(status_code=404, detail="Node not found.")
     return context
+
+@router.post("/copilot/explain")
+def get_copilot_explain(request: ExplainRequest):
+    explanation_data = llm_client.generate_concept_details(request.concept_name)
+    return explanation_data
 
 async def generate_mock_stream(message: str, context: dict):
     node = context.get("node")
@@ -263,16 +271,18 @@ async def generate_live_stream(message: str, context: dict, history: list, user_
             node_context_str += "Grounding Papers: " + ", ".join([p["name"] for p in context["papers"]]) + "\n"
 
     system_prompt = (
-        f"You are KnowledgeWeb's AI Copilot, acting as a "
-        f"{'friendly academic tutor' if user_role == 'student' else 'professional research assistant'} for a {user_role}. "
+        f"You are an advanced AI Tutor similar to Gemini. When explaining a concept:\n"
+        f"- Provide an exhaustive, engaging breakdown (Definition, How it works, Real-world application).\n"
+        f"- **CRITICAL - Embed Images/Diagrams:** If the topic is an IoT hardware component (like PIR Sensor), an electrical device, or a physical concept (like Density), you MUST include relevant visual image tags using reliable public markdown image links (e.g., from Unsplash source or Wikipedia: `![PIR Sensor Diagram](https://images.unsplash.com/photo-... )`).\n"
+        f"- Include fully structured comparison tables or markdown formulas where appropriate.\n"
+        f"- Never use robotic chatbot intro greetings like 'Hi, I am your assistant'.\n\n"
         f"You have access to the following graph-grounded context about the user's focus node:\n"
         f"==== GRAPH CONTEXT ====\n{node_context_str or 'No focus node currently selected.'}\n========================\n"
         f"Respond to the user's message. When making a claim, cite which graph relationship supports it (e.g. 'Linear Algebra is a prerequisite of Gradient Descent'). "
-        f"If the context doesn't contain enough information, state so clearly instead of hallucinating. Keep your explanation structured and concise.\n\n"
+        f"If the context doesn't contain enough information, state so clearly instead of hallucinating.\n\n"
         f"CRITICAL FORMATTING RULES:\n"
-        f"1. Generate clean, natural, and friendly responses. Avoid raw markdown artifacts, technical delimiters, or JSON dumps.\n"
-        f"2. DO NOT mention internal filenames (such as 'test.pdf', 'MachineLearningTextbook.pdf', or any text matching '*.pdf') in your answers unless intentionally cited. Refer to them as 'the document' or by the formal paper title/author.\n"
-        f"3. Make the tone conversational, clean, and directly helpful without robotic structural prefixes."
+        f"1. Generate clean, natural, and friendly responses using rich Markdown. Use headings, bold text, bullet points, and code blocks for readability.\n"
+        f"2. DO NOT mention internal filenames (such as 'test.pdf', 'MachineLearningTextbook.pdf', or any text matching '*.pdf') in your answers unless intentionally cited. Refer to them as 'the document' or by the formal paper title/author."
     )
 
     try:

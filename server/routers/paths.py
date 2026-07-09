@@ -11,7 +11,7 @@ def find_mock_longest_path(target_id: str, visited: set) -> list:
     visited.add(target_id)
     longest_subpath = []
     for edge in neo4j_client.mock_edges:
-        if edge["to"] == target_id and edge["type"] == "PREREQUISITE_OF":
+        if edge["to"] == target_id and edge["type"] in ["PREREQUISITE_OF", "DEPENDS_ON"]:
             subpath = find_mock_longest_path(edge["from"], visited.copy())
             if len(subpath) > len(longest_subpath):
                 longest_subpath = subpath
@@ -88,107 +88,88 @@ def get_learning_path(
                 if n.get("doc_id") == document_id:
                     doc_node_ids.add(nid)
 
-        def find_mock_longest_path(curr_id: str, visited: set) -> list:
+        def find_mock_all_prereqs(curr_id: str, visited: set) -> list:
             if curr_id in visited or curr_id not in doc_node_ids:
                 return []
             visited.add(curr_id)
-            longest_subpath = []
+            prereqs = []
             for edge in neo4j_client.mock_edges:
-                if edge["to"] == curr_id and edge["type"] == "PREREQUISITE_OF" and edge["from"] in doc_node_ids:
-                    subpath = find_mock_longest_path(edge["from"], visited.copy())
-                    if len(subpath) > len(longest_subpath):
-                        longest_subpath = subpath
-            return longest_subpath + [curr_id]
+                if edge["to"] == curr_id and edge["type"] in ["PREREQUISITE_OF", "DEPENDS_ON"] and edge["from"] in doc_node_ids:
+                    sub_prereqs = find_mock_all_prereqs(edge["from"], visited.copy())
+                    for p in sub_prereqs:
+                        if p not in prereqs:
+                            prereqs.append(p)
+                    if edge["from"] not in prereqs:
+                        prereqs.append(edge["from"])
+            return prereqs
 
-        path_ids = find_mock_longest_path(target, set())
-        for pid in path_ids:
-            node = neo4j_client.mock_nodes.get(pid)
-            if node:
-                path_nodes.append({
-                    "id": node["id"],
-                    "label": node.get("label", "Concept"),
-                    "name": node.get("name") or node.get("title") or "Unknown",
-                    "description": node.get("description", ""),
-                    "difficulty_level": node.get("difficulty_level", "Beginner")
-                })
+        path_ids = find_mock_all_prereqs(target, set())
+        if path_ids:
+            if target not in path_ids:
+                path_ids.append(target)
+            for pid in path_ids:
+                node = neo4j_client.mock_nodes.get(pid)
+                if node:
+                    path_nodes.append({
+                        "id": node["id"],
+                        "label": node.get("label", "Concept"),
+                        "name": node.get("name") or node.get("title") or "Unknown",
+                        "description": node.get("description", ""),
+                        "difficulty_level": node.get("difficulty_level", "Beginner")
+                    })
+        else:
+            path_nodes = []
     else:
         # Try path starting from a root, enforcing all path nodes are contained in the document/session
         if session_id:
-            query_root = """
-            MATCH path = (start:Concept)-[:PREREQUISITE_OF*1..5]->(target:Concept {id: $target_id, session_id: $session_id})
+            query_all = """
+            MATCH path = (start:Concept)-[:PREREQUISITE_OF|DEPENDS_ON*1..5]->(target:Concept {id: $target_id, session_id: $session_id})
             WHERE ALL(x IN nodes(path) WHERE x.session_id = $session_id)
-            AND NOT (start)<-[:PREREQUISITE_OF]-()
-            RETURN [n in nodes(path) | {
+            UNWIND nodes(path) AS n
+            WITH DISTINCT n, min(length(path)) as dist
+            ORDER BY dist DESC
+            RETURN collect({
                 id: n.id,
                 label: labels(n)[0],
                 name: coalesce(n.name, n.title, "Unknown"),
                 description: coalesce(n.description, ""),
                 difficulty_level: coalesce(n.difficulty_level, "Beginner")
-            }] as nodes_list
-            ORDER BY length(path) DESC LIMIT 1
+            }) as nodes_list
             """
-            res = neo4j_client.run_query(query_root, {"target_id": target, "session_id": session_id})
-            
-            # Fallback to any path ending at target if no root path
-            if not res:
-                query_any = """
-                MATCH path = (start:Concept)-[:PREREQUISITE_OF*1..5]->(target:Concept {id: $target_id, session_id: $session_id})
-                WHERE ALL(x IN nodes(path) WHERE x.session_id = $session_id)
-                RETURN [n in nodes(path) | {
-                    id: n.id,
-                    label: labels(n)[0],
-                    name: coalesce(n.name, n.title, "Unknown"),
-                    description: coalesce(n.description, ""),
-                    difficulty_level: coalesce(n.difficulty_level, "Beginner")
-                }] as nodes_list
-                ORDER BY length(path) DESC LIMIT 1
-                """
-                res = neo4j_client.run_query(query_any, {"target_id": target, "session_id": session_id})
+            res = neo4j_client.run_query(query_all, {"target_id": target, "session_id": session_id})
+
         else:
-            query_root = """
+            query_all = """
             MATCH (d:Document {id: $doc_id})
-            MATCH path = (start:Concept)-[:PREREQUISITE_OF*1..5]->(target:Concept {id: $target_id})
+            MATCH path = (start:Concept)-[:PREREQUISITE_OF|DEPENDS_ON*1..5]->(target:Concept {id: $target_id})
             WHERE ALL(x IN nodes(path) WHERE (d)-[:CONTAINS]->(x))
-            AND NOT (start)<-[:PREREQUISITE_OF]-()
-            RETURN [n in nodes(path) | {
+            UNWIND nodes(path) AS n
+            WITH DISTINCT n, min(length(path)) as dist
+            ORDER BY dist DESC
+            RETURN collect({
                 id: n.id,
                 label: labels(n)[0],
                 name: coalesce(n.name, n.title, "Unknown"),
                 description: coalesce(n.description, ""),
                 difficulty_level: coalesce(n.difficulty_level, "Beginner")
-            }] as nodes_list
-            ORDER BY length(path) DESC LIMIT 1
+            }) as nodes_list
             """
-            res = neo4j_client.run_query(query_root, {"target_id": target, "doc_id": document_id})
+            res = neo4j_client.run_query(query_all, {"target_id": target, "doc_id": document_id})
             
-            # Fallback to any path ending at target if no root path
-            if not res:
-                query_any = """
-                MATCH (d:Document {id: $doc_id})
-                MATCH path = (start:Concept)-[:PREREQUISITE_OF*1..5]->(target:Concept {id: $target_id})
-                WHERE ALL(x IN nodes(path) WHERE (d)-[:CONTAINS]->(x))
-                RETURN [n in nodes(path) | {
-                    id: n.id,
-                    label: labels(n)[0],
-                    name: coalesce(n.name, n.title, "Unknown"),
-                    description: coalesce(n.description, ""),
-                    difficulty_level: coalesce(n.difficulty_level, "Beginner")
-                }] as nodes_list
-                ORDER BY length(path) DESC LIMIT 1
-                """
-                res = neo4j_client.run_query(query_any, {"target_id": target, "doc_id": document_id})
-            
-        if res and res[0].get("nodes_list"):
+        if res and res[0].get("nodes_list") and len(res[0]["nodes_list"]) > 0:
             path_nodes = res[0]["nodes_list"]
-        else:
-            # No prerequisites found at all, return just the target node
-            path_nodes = [{
+            target_data = {
                 "id": target_node.get("id"),
-                "label": "Concept",
+                "label": target_node.get("label", "Concept"),
                 "name": target_node.get("name") or target_node.get("title") or "Unknown",
                 "description": target_node.get("description") or "",
                 "difficulty_level": target_node.get("difficulty_level") or "Beginner"
-            }]
+            }
+            if not any(n["id"] == target_data["id"] for n in path_nodes):
+                path_nodes.append(target_data)
+        else:
+            # No prerequisites found at all, return empty array per Step 3 requirement
+            path_nodes = []
 
     # 3. Create edges list
     edges = []

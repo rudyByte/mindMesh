@@ -71,6 +71,69 @@ class LLMClient:
             
             data = json.loads(content)
             if "nodes" in data and "relationships" in data:
+                nodes = data["nodes"]
+                relationships = data["relationships"]
+                
+                concept_names = [n.get("name") for n in nodes if n.get("name")]
+                if concept_names:
+                    prereq_prompt = (
+                        "You are building a learning roadmap.\n\n"
+                        "Below is a text chunk and the concepts extracted from it.\n\n"
+                        "Concepts:\n"
+                        f"{json.dumps(concept_names)}\n\n"
+                        "Return ONLY prerequisite relationships that are logically necessary for understanding another concept.\n\n"
+                        "Rules:\n"
+                        "- Use ONLY concepts already present in the list.\n"
+                        "- Never invent new concepts.\n"
+                        "- Return only JSON.\n"
+                        "- If Ohm's Law requires Voltage, Current and Resistance,\n"
+                        "return those relationships even if the PDF never literally says 'prerequisite'.\n"
+                        "- Use educational reasoning.\n"
+                        "- Ignore RELATED_TO unless it represents a learning dependency."
+                    )
+                    
+                    try:
+                        prereq_message = self._client.messages.create(
+                            model=config.ANTHROPIC_MODEL,
+                            max_tokens=1500,
+                            temperature=0.0,
+                            system=prereq_prompt,
+                            messages=[
+                                {"role": "user", "content": f"Text Chunk:\n{text_chunk}\n\nReturn the JSON with prerequisite relationships."}
+                            ]
+                        )
+                        prereq_content = prereq_message.content[0].text.strip()
+                        if prereq_content.startswith("```json"):
+                            prereq_content = prereq_content[7:]
+                        if prereq_content.startswith("```"):
+                            prereq_content = prereq_content[3:]
+                        if prereq_content.endswith("```"):
+                            prereq_content = prereq_content[:-3]
+                        prereq_content = prereq_content.strip()
+                        
+                        prereq_data = json.loads(prereq_content)
+                        if "relationships" in prereq_data:
+                            new_rels = prereq_data["relationships"]
+                            valid_names = set(concept_names)
+                            for r in new_rels:
+                                r_from = r.get("from")
+                                r_to = r.get("to")
+                                r_type = r.get("type", "PREREQUISITE_OF")
+                                if r_from in valid_names and r_to in valid_names:
+                                    exists = any(
+                                        e.get("from") == r_from and e.get("to") == r_to and e.get("type") == r_type
+                                        for e in relationships
+                                    )
+                                    if not exists:
+                                        relationships.append({
+                                            "from": r_from,
+                                            "to": r_to,
+                                            "type": r_type
+                                        })
+                    except Exception as e:
+                        logger.error(f"Error during prerequisite generation: {e}")
+
+                data["relationships"] = relationships
                 return data
             raise ValueError("LLM returned JSON missing 'nodes' or 'relationships' keys.")
         except Exception as e:

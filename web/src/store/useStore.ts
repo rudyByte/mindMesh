@@ -106,6 +106,16 @@ interface AppState {
   setHighlights: (highlights: HighlightInfo[]) => void;
   addHighlight: (highlight: HighlightInfo) => void;
 
+  // Sprint 6 (Learning Roadmap)
+  isLearningMode: boolean;
+  setIsLearningMode: (val: boolean) => void;
+  gapPrerequisites: any[];
+  setGapPrerequisites: (prereqs: any[]) => void;
+  gapLoading: boolean;
+  setGapLoading: (loading: boolean) => void;
+  gapError: string | null;
+  setGapError: (err: string | null) => void;
+
   // Citations & Learning Paths (Sprint 5)
   citations: CitationInfo[];
   setCitations: (citations: CitationInfo[]) => void;
@@ -660,6 +670,17 @@ export const useStore = create<AppState>((set) => ({
   setActiveTab: (tab) => set({ activeTab: tab }),
   documentText: null,
   setDocumentText: (text) => set({ documentText: text }),
+
+  // Sprint 6
+  isLearningMode: false,
+  setIsLearningMode: (val) => set({ isLearningMode: val }),
+  gapPrerequisites: [],
+  setGapPrerequisites: (prereqs) => set({ gapPrerequisites: prereqs }),
+  gapLoading: false,
+  setGapLoading: (loading) => set({ gapLoading: loading }),
+  gapError: null,
+  setGapError: (err) => set({ gapError: err }),
+
   notes: [],
   setNotes: (notes) => set((state) => {
     saveSessionLocal(state.sessionId, { notes: notes });

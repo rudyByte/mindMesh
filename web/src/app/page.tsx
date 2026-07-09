@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useStore } from '../store/useStore';
 import { LeftSidebar, RightSidebar, BottomPanel } from '../components/Panels';
 import GraphCanvas from '../components/GraphCanvas';
+import LearningRoadmap from '../components/LearningRoadmap';
 import UploadModal from '../components/UploadModal';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { ConnectionBanner } from '../components/ConnectionBanner';
@@ -47,6 +48,7 @@ export default function DashboardPage() {
   const documents = useStore((state) => state.documents);
   const activeTab = useStore((state) => state.activeTab);
   const setActiveTab = useStore((state) => state.setActiveTab);
+  const isLearningMode = useStore((state) => state.isLearningMode);
   const documentText = useStore((state) => state.documentText);
   const setDocumentText = useStore((state) => state.setDocumentText);
   const addHighlight = useStore((state) => state.addHighlight);
@@ -282,9 +284,17 @@ export default function DashboardPage() {
           {/* Main Tab Render */}
           <div className="flex-1 min-h-0 relative">
             {activeTab === 'map' ? (
-              <ErrorBoundary name="Knowledge Graph Canvas">
-                <GraphCanvas />
-              </ErrorBoundary>
+              <div className="w-full h-full relative">
+                {/* Learning Roadmap Overlay */}
+                <LearningRoadmap />
+                
+                {/* Graph Canvas (fades out during learning mode) */}
+                <div className={`absolute inset-0 transition-opacity duration-500 ${isLearningMode ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+                  <ErrorBoundary name="Knowledge Graph Canvas">
+                    <GraphCanvas />
+                  </ErrorBoundary>
+                </div>
+              </div>
             ) : (
               /* PDF Document Raw Text Viewer (Sprint 4) */
               <ErrorBoundary name="Document Text Reader">

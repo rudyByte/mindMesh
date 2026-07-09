@@ -326,6 +326,13 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             current_progress = int(40 + (i + 1) * step_increment)
             extraction_status_cache[doc_id]["progress_pct"] = min(90, current_progress)
             
+        # Implement explicit Regex/Stop-Word Blacklist for broken or non-academic terms
+        STOP_WORDS_BLACKLIST = {"become", "becomes", "became", "want", "learn", "how", "to", "the", "with", "variabl"}
+        all_nodes = [node for node in all_nodes if node.get("name", "").lower() not in STOP_WORDS_BLACKLIST]
+        all_relationships = [rel for rel in all_relationships 
+                             if rel.get("from", "").lower() not in STOP_WORDS_BLACKLIST 
+                             and rel.get("to", "").lower() not in STOP_WORDS_BLACKLIST]
+
         # Entity Quality Validation Blocker
         if all_nodes:
             low_quality_nodes = []
@@ -451,12 +458,14 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             
             # Normalize relationship type
             normalized_type = rel_type.upper().replace("-", "_").replace(" ", "_")
-            if normalized_type in ["REQUIRES", "PREREQUISITE_OF"]:
+            if normalized_type in ["REQUIRES", "PREREQUISITE", "PREREQUISITE_OF"]:
                 normalized_type = "PREREQUISITE_OF"
             elif normalized_type in ["DEPENDS_ON", "DEPENDENCY", "DEPENDENCY_OF"]:
                 normalized_type = "DEPENDS_ON"
             elif normalized_type in ["USES", "USES_METHOD", "UTILIZES", "EMPLOY"]:
                 normalized_type = "USES"
+            elif normalized_type in ["USED_BY"]:
+                normalized_type = "USED_BY"
             elif normalized_type in ["USED_FOR", "USE_FOR"]:
                 normalized_type = "USED_FOR"
             elif normalized_type in ["EVALUATED_ON", "EVALUATE_ON", "TESTED_ON"]:
@@ -465,8 +474,12 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 normalized_type = "EXTENDS"
             elif normalized_type in ["CITES", "REFERENCES", "REFERENCED_BY", "CITES_PAPER"]:
                 normalized_type = "CITES"
-            elif normalized_type in ["CONTAINS", "PART_OF", "INCLUDES"]:
+            elif normalized_type in ["PART_OF", "INCLUDES"]:
+                normalized_type = "PART_OF"
+            elif normalized_type in ["CONTAINS"]:
                 normalized_type = "CONTAINS"
+            elif normalized_type in ["CAUSES", "LEADS_TO"]:
+                normalized_type = "CAUSES"
             elif normalized_type in ["RELATED_TO", "ASSOCIATED_WITH"]:
                 normalized_type = "RELATED_TO"
             elif normalized_type in ["AUTHORED_BY", "AUTHOR_OF"]:
@@ -664,6 +677,22 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             "doi": None,
         }
         canonical_nodes.append(paper_node)
+
+        # Generate Prerequisite Relationships via second LLM pass
+        logger.info("Running second LLM pass for prerequisite generation...")
+        concept_names = [n["name"] for n in canonical_nodes if n.get("label") not in ["Document", "Paper", "Citation", "Note", "Highlight"]]
+        prereqs = llm_client.extract_document_prerequisites(concept_names)
+        if prereqs:
+            logger.info(f"Generated {len(prereqs)} PREREQUISITE relationships.")
+            for req in prereqs:
+                from_name = req.get("from")
+                to_name = req.get("to")
+                if from_name and to_name:
+                    final_relationships.append({
+                        "from": from_name,
+                        "to": to_name,
+                        "type": "PREREQUISITE_OF"
+                    })
 
         # Dedicated bibliography extraction
         references_text = None
@@ -896,7 +925,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             if not from_name or not to_name:
                 continue
                 
-            if rel_type not in ["PREREQUISITE_OF", "RELATED_TO", "EXTENDS", "CONTRADICTS", "USES", "USES_METHOD", "DEPENDS_ON", "CITES", "AUTHORED_BY", "AFFILIATED_WITH", "MENTIONS", "HAS_KEYWORD", "USED_FOR", "EVALUATED_ON"]:
+            if rel_type not in ["PREREQUISITE", "PREREQUISITE_OF", "RELATED_TO", "EXTENDS", "CONTRADICTS", "USES", "USES_METHOD", "DEPENDS_ON", "USED_BY", "PART_OF", "CAUSES", "CITES", "AUTHORED_BY", "AFFILIATED_WITH", "MENTIONS", "HAS_KEYWORD", "USED_FOR", "EVALUATED_ON"]:
                 rel_type = "RELATED_TO"
                 
             if session_id:

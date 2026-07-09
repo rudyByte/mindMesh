@@ -6,6 +6,7 @@ import { useStore, GraphNode, GraphEdge } from '../store/useStore';
 import { API_BASE_URL } from '../lib/api';
 import { Layers, Compass, Loader2 } from 'lucide-react';
 import { forceCollide } from 'd3-force';
+import LearningRoadmapOverlay from './LearningRoadmapOverlay';
 
 // Dynamically import force graph to prevent SSR errors in Next.js
 const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), {
@@ -87,6 +88,9 @@ export default function GraphCanvas() {
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [loading, setLoading] = useState(false);
   const [canvasError, setCanvasError] = useState<string | null>(null);
+  const [isOverlayOpen, setIsOverlayOpen] = useState(false);
+  const [roadmapData, setRoadmapData] = useState<any[]>([]);
+  const [roadmapLoading, setRoadmapLoading] = useState(false);
 
   // Store state
   const nodes = useStore((state) => state.nodes);
@@ -191,6 +195,7 @@ export default function GraphCanvas() {
   // contracts the graph instead of leaving previously appended nodes behind.
   useEffect(() => {
     if (!selectedNodeId || !activeDocumentId) return;
+    if (selectedNodeId.startsWith('llm-req-')) return;
 
     const controller = new AbortController();
     const expandSelectedNode = async () => {
@@ -411,7 +416,27 @@ export default function GraphCanvas() {
       ...node
     };
     setSelectedNode(clickedNode);
+    setIsOverlayOpen(true);
+    setRoadmapLoading(true);
+    setRoadmapData([]);
+
     try {
+      // Fetch Learning Roadmap data
+      const roadmapUrl = `${API_BASE_URL}/learning-roadmap/${node.id}`;
+      const roadmapRes = await fetch(roadmapUrl);
+      if (roadmapRes.ok) {
+        const roadmapJson = await roadmapRes.json();
+        setRoadmapData(roadmapJson.roadmap || []);
+      }
+    } catch (err) {
+      console.error('Failed to retrieve learning roadmap', err);
+    } finally {
+      setRoadmapLoading(false);
+    }
+
+    try {
+      if (node.id.startsWith('llm-req-')) return;
+      
       // Fetch full details of the clicked node
       const detailsUrl = `${API_BASE_URL}/graph/node/${node.id}?document_id=${activeDocumentId || 'doc-1'}`;
       const detailsRes = await fetch(detailsUrl);
@@ -734,6 +759,68 @@ export default function GraphCanvas() {
             }}
           />
         </GraphErrorBoundary>
+      )}
+
+      {/* HUD Info */}
+      <div className="absolute bottom-4 left-4 z-10 pointer-events-none">
+        <div className="text-[9px] font-mono font-bold text-cyan-500/40 uppercase tracking-widest">
+          Nodes: {validatedGraphData.nodes.length} | Edges: {validatedGraphData.links.length}
+        </div>
+      </div>
+
+      <LearningRoadmapOverlay
+        isOpen={isOverlayOpen}
+        selectedNode={selectedNode}
+        roadmap={roadmapData}
+        onClose={() => setIsOverlayOpen(false)}
+        onLearnThis={async (node, e) => {
+          setIsOverlayOpen(false);
+          
+          const conceptName = node.name;
+          const fallbackId = node.id || `roadmap-${conceptName}`;
+
+          // Immediately update state with basic info so it doesn't crash the panel
+          const basicNode = {
+            id: fallbackId,
+            label: node.label || 'Concept',
+            name: conceptName,
+            description: node.description || '',
+            difficulty_level: node.difficulty_level || 'Beginner',
+            ...node
+          } as GraphNode;
+          
+          setSelectedNode(basicNode);
+
+          try {
+            // Trigger API fetch to concept explainer endpoint
+            const detailsUrl = `${API_BASE_URL}/graph/node/${fallbackId}?document_id=${activeDocumentId || 'doc-1'}`;
+            const detailsRes = await fetch(detailsUrl);
+            
+            if (detailsRes.ok) {
+              const detailsData = await detailsRes.json();
+              // Feed that data directly into the active 'AI Detail Panel' state
+              setSelectedNode(detailsData);
+              
+              // Find in graph and center if it exists
+              const foundNode = nodes.find((n: any) => n.id === detailsData.id || n.name === conceptName);
+              if (foundNode && fgRef.current) {
+                fgRef.current.centerAt(foundNode.x, foundNode.y, 800);
+                fgRef.current.zoom(2.5, 800);
+              }
+            } else {
+              console.error(`Failed to load concept explainer details (HTTP ${detailsRes.status})`);
+            }
+          } catch (err) {
+            console.error('Failed to retrieve concept explainer details', err);
+          }
+        }}
+      />
+
+      {roadmapLoading && isOverlayOpen && (
+        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center bg-[#010605]/80 backdrop-blur-sm rounded-2xl">
+          <Loader2 className="w-10 h-10 animate-spin text-cyan-400 mb-4" />
+          <p className="text-cyan-400 font-mono tracking-widest text-sm animate-pulse uppercase">Fetching Roadmap...</p>
+        </div>
       )}
     </div>
   );

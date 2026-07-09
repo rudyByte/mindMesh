@@ -254,7 +254,7 @@ class Neo4jClient:
                 return [{"id": node["id"], "name": node["name"]} for node in self.mock_nodes.values() if node.get("label") in ["Topic", "Subtopic", "Concept", "Technology", "Framework", "Application", "Paper", "Author", "Keyword"]]
 
             # Expand graph paths (Sprint 2 expand / traverse)
-            if any(term in query_upper for term in ["PREREQUISITE_OF", "RELATED_TO", "EXTENDS", "DEPENDS_ON", "USES", "CITES", "CONTAINS", "PATH"]):
+            if any(term in query_upper for term in ["PREREQUISITE", "RELATED_TO", "EXTENDS", "DEPENDS_ON", "USES", "CITES", "CONTAINS", "PATH"]):
                 target_id = params.get("id") or params.get("node_id")
                 depth = params.get("depth", 1)
                 mode = params.get("mode", "basic")
@@ -297,7 +297,7 @@ class Neo4jClient:
                 for edge in self.mock_edges:
                     if edge["type"] == "CONTAINS" and (edge["from"] == doc_id or edge["from"] == "doc-1" or (edge["from"] in self.mock_nodes and self.mock_nodes[edge["from"]].get("label") == "Document")):
                         continue
-                    if mode == "basic" and edge["type"] != "PREREQUISITE_OF":
+                    if mode == "basic" and edge["type"] != "PREREQUISITE":
                         continue
                     if session_id and edge.get("session_id") != session_id:
                         continue

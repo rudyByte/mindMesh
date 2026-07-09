@@ -7,7 +7,7 @@ import {
   FileText, Plus, Database, Cpu, HelpCircle, 
   Map as MapIcon, Sparkles, GraduationCap,
   ArrowRight, Landmark, Tag, ChevronDown, ChevronUp, UserCheck,
-  Copy, Check, Bookmark, X, ChevronRight, ChevronLeft, Send, Trash, Loader2, RefreshCw
+  Copy, Check, Bookmark, X, ChevronRight, ChevronLeft, Send, Trash, Loader2, RefreshCw, Radar, Search
 } from 'lucide-react';
 
 // ==================== HELPER ====================
@@ -894,6 +894,14 @@ export function RightSidebar() {
   const globalNodes = useStore((state) => state.nodes);
   const activeDocumentId = useStore((state) => state.activeDocumentId);
   const sessionId = useStore((state) => state.sessionId);
+  const isLearningMode = useStore((state) => state.isLearningMode);
+  const setIsLearningMode = useStore((state) => state.setIsLearningMode);
+  const gapPrerequisites = useStore((state) => state.gapPrerequisites);
+  const setGapPrerequisites = useStore((state) => state.setGapPrerequisites);
+  const gapLoading = useStore((state) => state.gapLoading);
+  const setGapLoading = useStore((state) => state.setGapLoading);
+  const gapError = useStore((state) => state.gapError);
+  const setGapError = useStore((state) => state.setGapError);
 
   // Local state
   const [contextCard, setContextCard] = useState<any>(null);
@@ -905,6 +913,37 @@ export function RightSidebar() {
   const [pathGenerating, setPathGenerating] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isOpen, setIsOpen] = useState(true);
+
+  useEffect(() => {
+    if (selectedNode) {
+      setGapPrerequisites([]);
+      setGapError(null);
+    }
+  }, [selectedNode]);
+
+  const handleLearnBeforeThis = async () => {
+    if (!selectedNode) return;
+    setGapLoading(true);
+    setGapError(null);
+    setIsLearningMode(true); // Enter full-canvas learning mode
+    console.log('Learn Before This Clicked, fetching for:', selectedNode.id);
+    try {
+      const url = sessionId
+        ? `${API_BASE_URL}/graph/prerequisites/${selectedNode.id}?session_id=${sessionId}`
+        : `${API_BASE_URL}/graph/prerequisites/${selectedNode.id}?document_id=${activeDocumentId || 'doc-1'}`;
+      const res = await fetch(url);
+      console.log('Learn Before This API Response Status:', res.status);
+      if (!res.ok) throw new Error('Failed to fetch prerequisites');
+      const data = await res.json();
+      console.log('Learn Before This Data:', data);
+      setGapPrerequisites(data.prerequisites || []);
+    } catch (err) {
+      console.error(err);
+      setGapError('Failed to load prerequisites.');
+    } finally {
+      setGapLoading(false);
+    }
+  };
 
   // Calculate learning path steps mapping
   const pathSteps = activePathNodeIds.map(id => globalNodes.find(n => n.id === id)).filter(Boolean);
@@ -1001,21 +1040,46 @@ export function RightSidebar() {
       setContextLoading(true);
       setContextError(null);
       try {
-        const response = await fetch(`${API_BASE_URL}/copilot/context`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            node_id: selectedNode.id,
-            document_id: activeDocumentId || 'doc-1'
-          }),
-        });
-        if (response.ok) {
-          const data = await response.json();
-          setContextCard(data);
+        if (selectedNode.id.startsWith('llm-req-')) {
+          const response = await fetch(`${API_BASE_URL}/copilot/explain`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ concept_name: selectedNode.name })
+          });
+          if (response.ok) {
+            const data = await response.json();
+            setContextCard({
+              node: {
+                id: selectedNode.id,
+                name: selectedNode.name,
+                description: data.explanation,
+                label: 'Concept',
+                difficulty_level: 'Beginner'
+              },
+              prerequisites: [],
+              related: [],
+              papers: []
+            });
+          } else {
+            setContextError(`HTTP Error ${response.status}: ${response.statusText}`);
+          }
         } else {
-          setContextError(`HTTP Error ${response.status}: ${response.statusText}`);
+          const response = await fetch(`${API_BASE_URL}/copilot/context`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              node_id: selectedNode.id,
+              document_id: activeDocumentId || 'doc-1'
+            }),
+          });
+          if (response.ok) {
+            const data = await response.json();
+            setContextCard(data);
+          } else {
+            setContextError(`HTTP Error ${response.status}: ${response.statusText}`);
+          }
         }
       } catch (err: any) {
         console.error('Failed to load focus context', err);
@@ -1365,16 +1429,16 @@ export function RightSidebar() {
             {selectedNode.label === 'Concept' && (
               <div className="grid grid-cols-2 gap-2 mt-4">
                 <button
+                  onClick={handleLearnBeforeThis}
+                  className="py-2 px-2.5 bg-[#030c0b] border border-cyan-500/10 hover:border-cyan-500/30 text-slate-300 hover:text-cyan-300 text-[10px] font-bold rounded-lg transition-all cursor-pointer font-sans"
+                >
+                  Learn Before This
+                </button>
+                <button
                   onClick={() => triggerQuickAction('explain')}
                   className="py-2 px-2.5 bg-[#030c0b] border border-cyan-500/10 hover:border-cyan-500/30 text-slate-300 hover:text-cyan-300 text-[10px] font-bold rounded-lg transition-all cursor-pointer font-sans"
                 >
                   Explain Concept
-                </button>
-                <button
-                  onClick={() => triggerQuickAction('compare')}
-                  className="py-2 px-2.5 bg-[#030c0b] border border-cyan-500/10 hover:border-cyan-500/30 text-slate-300 hover:text-cyan-300 text-[10px] font-bold rounded-lg transition-all cursor-pointer font-sans"
-                >
-                  Prereqs Compare
                 </button>
               </div>
             )}
