@@ -23,7 +23,7 @@ class SupabaseClientWrapper:
             logger.warning(f"Failed to connect to Supabase: {e}. Falling back to mock local storage.")
             self._is_mock = True
 
-    def upload_file(self, bucket: str, path: str, file_content: bytes) -> str:
+    def upload_file(self, bucket: str, path: str, file_content: bytes, content_type: str = "application/pdf") -> str:
         if self._is_mock:
             # Root directory of the project
             root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,7 +38,11 @@ class SupabaseClientWrapper:
             
         try:
             # Upload to bucket
-            self._client.storage.from_(bucket).upload(path, file_content, {"content-type": "application/pdf"})
+            self._client.storage.from_(bucket).upload(
+                path,
+                file_content,
+                {"content-type": content_type, "upsert": "true"},
+            )
             url = self._client.storage.from_(bucket).get_public_url(path)
             return url
         except Exception as e:

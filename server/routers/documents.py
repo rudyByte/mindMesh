@@ -2,6 +2,7 @@ import io
 import uuid
 import datetime
 import logging
+import json
 from typing import Optional
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
@@ -9,6 +10,7 @@ from pypdf import PdfReader
 
 from server.utils.neo4j_client import neo4j_client
 from server.utils.supabase_client import supabase_client
+from server.utils.vercel_blob_client import vercel_blob_client
 from server.utils.llm_client import llm_client, calculate_entity_quality, singularize_concept_name, normalize_and_clean_concept_name
 from server.utils.sequence_parser import parse_learning_sequences
 from server.utils.text_cleaner import clean_pdf_text_from_bytes
@@ -29,6 +31,80 @@ CHUNK_SIZE = 2.5 * 1024 * 1024  # 2.5MB per chunk (safe margin under Vercel's 4.
 chunked_uploads: dict[str, dict] = {}
 
 MAX_CHUNK_AGE_SECONDS = 600  # 10 minutes — clean up orphaned uploads older than this
+
+
+def _chunk_meta_path(upload_id: str) -> str:
+    return f"chunked/{upload_id}_meta.json"
+
+
+def _chunk_part_path(upload_id: str, chunk_index: int) -> str:
+    return f"chunked/{upload_id}_{chunk_index}.part"
+
+
+def _blob_path_from_storage_url(url: str) -> Optional[str]:
+    if not url:
+        return None
+    if url.startswith("vercel-blob://"):
+        return url.replace("vercel-blob://", "", 1)
+    if ".blob.vercel-storage.com/" in url:
+        try:
+            from urllib.parse import urlparse, unquote
+            parsed = urlparse(url)
+            return unquote(parsed.path.lstrip("/"))
+        except Exception:
+            return None
+    return None
+
+
+def _save_chunk_session(upload_id: str, session: dict) -> None:
+    """Persist chunk metadata so Vercel serverless instances can share it."""
+    meta = {k: v for k, v in session.items() if k != "chunks"}
+    payload = json.dumps(meta).encode("utf-8")
+    if vercel_blob_client.is_configured():
+        vercel_blob_client.put(_chunk_meta_path(upload_id), payload, "application/json")
+    else:
+        supabase_client.upload_file(
+            "documents",
+            _chunk_meta_path(upload_id),
+            payload,
+            content_type="application/json",
+        )
+
+
+def _load_chunk_session(upload_id: str) -> Optional[dict]:
+    if upload_id in chunked_uploads:
+        return chunked_uploads[upload_id]
+    try:
+        if vercel_blob_client.is_configured():
+            raw = vercel_blob_client.get(_chunk_meta_path(upload_id))
+        else:
+            raw = supabase_client.download_file("documents", _chunk_meta_path(upload_id))
+        meta = json.loads(raw.decode("utf-8"))
+        meta["chunks"] = {}
+        chunked_uploads[upload_id] = meta
+        return meta
+    except Exception as e:
+        logger.warning(f"Chunk session {upload_id} not found in persistent storage: {e}")
+        return None
+
+
+def _delete_chunk_session(upload_id: str, total_chunks: int) -> None:
+    chunked_uploads.pop(upload_id, None)
+    try:
+        if vercel_blob_client.is_configured():
+            vercel_blob_client.delete(_chunk_meta_path(upload_id))
+        else:
+            supabase_client.delete_file("documents", _chunk_meta_path(upload_id))
+    except Exception as e:
+        logger.warning(f"Failed to delete chunk metadata for {upload_id}: {e}")
+    for i in range(total_chunks):
+        try:
+            if vercel_blob_client.is_configured():
+                vercel_blob_client.delete(_chunk_part_path(upload_id, i))
+            else:
+                supabase_client.delete_file("documents", _chunk_part_path(upload_id, i))
+        except Exception as e:
+            logger.warning(f"Failed to delete chunk {i} for {upload_id}: {e}")
 
 
 class UploadResponse(BaseModel):
@@ -1036,7 +1112,10 @@ def delete_document_internal(doc_id: str, session_id: Optional[str] = None):
 
     # Delete storage file
     if url:
-        if url.startswith("file:///"):
+        blob_path = _blob_path_from_storage_url(url)
+        if blob_path and vercel_blob_client.is_configured():
+            vercel_blob_client.delete(blob_path)
+        elif url.startswith("file:///"):
             filename = os.path.basename(url)
             supabase_client.delete_file("documents", filename)
         else:
@@ -1127,8 +1206,13 @@ def _process_file_upload(
         doc_id = str(uuid.uuid4())
         path = f"uploads/{doc_id}_{filename}"
 
-        # Upload to Supabase Storage (will save locally in mock mode)
-        storage_url = supabase_client.upload_file("documents", path, file_bytes)
+        # Upload to durable storage. On Vercel, Blob is available and serverless-safe;
+        # Supabase remains the fallback for local/dev deployments configured with it.
+        if vercel_blob_client.is_configured():
+            blob_result = vercel_blob_client.put(path, file_bytes, "application/pdf")
+            storage_url = blob_result.get("url") or f"vercel-blob://{path}"
+        else:
+            storage_url = supabase_client.upload_file("documents", path, file_bytes)
 
         # Write Document node to Neo4j
         upload_date = datetime.datetime.now().isoformat()
@@ -1217,6 +1301,12 @@ async def start_chunked_upload(
         "replace_doc_id": replace_doc_id,
         "created_at": now
     }
+    try:
+        _save_chunk_session(upload_id, chunked_uploads[upload_id])
+    except Exception as e:
+        logger.error(f"Failed to persist chunked upload session {upload_id}: {e}")
+        chunked_uploads.pop(upload_id, None)
+        raise HTTPException(status_code=500, detail="Failed to initialize persistent upload session.")
     logger.info(f"Started chunked upload {upload_id} for {filename} ({total_chunks} chunks, {file_size} bytes)")
     return StartChunkedUploadResponse(
         upload_id=upload_id,
@@ -1231,14 +1321,31 @@ async def upload_chunk(
     chunk_index: int = Query(...),
     file: UploadFile = File(...)
 ):
-    if upload_id not in chunked_uploads:
+    upload = _load_chunk_session(upload_id)
+    if not upload:
         raise HTTPException(status_code=404, detail="Upload session not found. Please start a new upload.")
 
     chunk_data = await file.read()
-    chunked_uploads[upload_id]["chunks"][chunk_index] = chunk_data
+    if chunk_index < 0 or chunk_index >= int(upload["total"]):
+        raise HTTPException(status_code=400, detail="Chunk index out of range.")
 
-    received = len(chunked_uploads[upload_id]["chunks"])
-    total = chunked_uploads[upload_id]["total"]
+    try:
+        if vercel_blob_client.is_configured():
+            vercel_blob_client.put(_chunk_part_path(upload_id, chunk_index), chunk_data, "application/octet-stream")
+        else:
+            supabase_client.upload_file(
+                "documents",
+                _chunk_part_path(upload_id, chunk_index),
+                chunk_data,
+                content_type="application/octet-stream",
+            )
+    except Exception as e:
+        logger.error(f"Failed to persist chunk {chunk_index} for upload {upload_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to store upload chunk.")
+
+    upload.setdefault("chunks", {})[chunk_index] = True
+    received = len(upload["chunks"])
+    total = int(upload["total"])
 
     logger.info(f"Received chunk {chunk_index + 1}/{total} for upload {upload_id}")
 
@@ -1255,21 +1362,31 @@ async def complete_chunked_upload(
     upload_id: str = Query(...),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
-    if upload_id not in chunked_uploads:
+    upload = _load_chunk_session(upload_id)
+    if not upload:
         raise HTTPException(status_code=404, detail="Upload session not found.")
 
-    upload = chunked_uploads[upload_id]
+    total_chunks = int(upload["total"])
+    chunks: list[bytes] = []
+    missing: list[int] = []
 
-    # Verify all chunks received
-    if len(upload["chunks"]) < upload["total"]:
-        missing = upload["total"] - len(upload["chunks"])
-        raise HTTPException(status_code=400, detail=f"Missing {missing} chunks. Complete upload first.")
+    for i in range(total_chunks):
+        try:
+            if vercel_blob_client.is_configured():
+                chunks.append(vercel_blob_client.get(_chunk_part_path(upload_id, i)))
+            else:
+                chunks.append(supabase_client.download_file("documents", _chunk_part_path(upload_id, i)))
+        except Exception:
+            missing.append(i)
 
-    # Reassemble file from chunks
-    file_bytes = b"".join(upload["chunks"][i] for i in sorted(upload["chunks"].keys()))
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing {len(missing)} chunks. Complete upload first.")
 
-    # Clean up the upload session
-    del chunked_uploads[upload_id]
+    # Reassemble file from persistent chunks
+    file_bytes = b"".join(chunks)
+
+    # Clean up the persistent upload session
+    _delete_chunk_session(upload_id, total_chunks)
 
     # Process using the shared helper
     return _process_file_upload(
@@ -1538,8 +1655,13 @@ def get_document_text(id: str, session_id: Optional[str] = Query(None)):
     
     try:
         title = res[0]["title"]
-        path = f"uploads/{id}_{title}"
-        file_bytes = supabase_client.download_file("documents", path)
+        url = res[0].get("url") or ""
+        blob_path = _blob_path_from_storage_url(url)
+        if blob_path and vercel_blob_client.is_configured():
+            file_bytes = vercel_blob_client.get(blob_path)
+        else:
+            path = f"uploads/{id}_{title}"
+            file_bytes = supabase_client.download_file("documents", path)
         
         from server.utils.text_cleaner import stream_clean_pdf_text_from_bytes
         from fastapi.responses import StreamingResponse
@@ -1575,7 +1697,10 @@ def delete_session_data(session_id: str):
     for doc in doc_nodes:
         url = doc.get("storage_url", "")
         if url:
-            if url.startswith("file:///"):
+            blob_path = _blob_path_from_storage_url(url)
+            if blob_path and vercel_blob_client.is_configured():
+                vercel_blob_client.delete(blob_path)
+            elif url.startswith("file:///"):
                 filename = os.path.basename(url)
                 supabase_client.delete_file("documents", filename)
             else:
