@@ -1,6 +1,7 @@
 {
   "buildCommand": "cd web && npm run build",
   "installCommand": "cd web && npm install",
+  "outputDirectory": "web/.next",
   "functions": {
     "api/index.py": {
       "maxDuration": 30,

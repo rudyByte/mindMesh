@@ -38,3 +38,6 @@ NUL
 
 # Temp files left by scripts/commands
 /tmp/
+
+.vercel
+.env*
