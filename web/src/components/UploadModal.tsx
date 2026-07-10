@@ -10,8 +10,10 @@ interface UploadModalProps {
   onClose: () => void;
 }
 
-const CHUNK_SIZE = 2.5 * 1024 * 1024; // 2.5MB per chunk (safe under Vercel's 4.5MB limit)
-const MAX_SINGLE_UPLOAD = 3.5 * 1024 * 1024; // Use single upload for files <= 3.5MB
+// Vercel can reject multipart bodies before FastAPI receives them. Keep each
+// request comfortably under the platform limit and use chunked upload for every
+// PDF so live uploads never hit /documents/upload with the full file body.
+const CHUNK_SIZE = 1 * 1024 * 1024; // 1MB per chunk, plus multipart overhead
 
 export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const [dragActive, setDragActive] = useState(false);
@@ -199,10 +201,9 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
     setProgress(5);
 
     try {
-      // Use chunked upload for files over 3.5MB, single upload for smaller files
-      const uploadData = file.size > MAX_SINGLE_UPLOAD
-        ? await uploadInChunks(file)
-        : await uploadSingle(file);
+      // Always use chunked upload in production-safe mode. Full-file multipart
+      // uploads can trigger a 413 at Vercel's edge even when the PDF looks small.
+      const uploadData = await uploadInChunks(file);
 
       const docId = uploadData.id;
 
