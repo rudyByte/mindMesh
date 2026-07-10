@@ -1,13 +1,24 @@
 {
   "name": "mindmesh-monorepo",
   "version": "1.0.0",
+  "private": true,
   "description": "MindMesh monorepo for Next.js web application and FastAPI backend.",
+  "workspaces": ["web", "api"],
   "scripts": {
-    "dev": "npx concurrently -n \"web,api\" -c \"cyan,magenta\" \"npm run dev:web\" \"npm run dev:api\"",
+    "dev": "turbo run dev",
+    "dev:legacy": "npx concurrently -n \"web,api\" -c \"cyan,magenta\" \"npm run dev:web\" \"npm run dev:api\"",
     "dev:web": "npm run dev --prefix web",
     "dev:api": "python -m uvicorn server.main:app --reload",
+    "build": "turbo run build",
+    "build:web": "npm run build --prefix web",
     "install:web": "npm install --prefix web",
     "install:api": "pip install -r server/requirements.txt",
-    "install:all": "npm run install:web && npm run install:api"
-  }
+    "install:all": "npm run install:web && npm run install:api",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0"
+  },
+  "packageManager": "npm@11.6.2"
 }

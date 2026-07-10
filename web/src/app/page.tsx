@@ -150,7 +150,7 @@ export default function DashboardPage() {
     if (!selectedText || !activeDocumentId || !sessionId) return;
 
     try {
-      const response = await fetch(`${API_BASE_URL}/highlights?document_id=${activeDocumentId}`, {
+      const response = await fetch(`${API_BASE_URL}/highlights?session_id=${sessionId}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

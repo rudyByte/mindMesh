@@ -33,6 +33,9 @@ mock_storage/
 Thumbs.db
 NUL
 
+# Turbo
+.turbo
+
 # Logs
 *.log
 

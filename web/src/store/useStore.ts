@@ -497,7 +497,7 @@ export const useStore = create<AppState>((set) => ({
 
       // 2. Fetch notes
       if (nextActiveId) {
-        const notesRes = await fetch(`${API_BASE_URL}/notes?document_id=${nextActiveId}`);
+        const notesRes = await fetch(`${API_BASE_URL}/notes?session_id=${id}`);
         if (notesRes.ok) {
           const data = await notesRes.json();
           set({ notes: data || [] });
@@ -509,7 +509,7 @@ export const useStore = create<AppState>((set) => ({
 
       // 3. Fetch highlights
       if (nextActiveId) {
-        const highlightsRes = await fetch(`${API_BASE_URL}/highlights?document_id=${nextActiveId}`);
+        const highlightsRes = await fetch(`${API_BASE_URL}/highlights?session_id=${id}`);
         if (highlightsRes.ok) {
           const data = await highlightsRes.json();
           set({ highlights: data || [] });
@@ -521,7 +521,7 @@ export const useStore = create<AppState>((set) => ({
 
       // 4. Fetch citations
       if (nextActiveId) {
-        const citationsRes = await fetch(`${API_BASE_URL}/citations?document_id=${nextActiveId}`);
+        const citationsRes = await fetch(`${API_BASE_URL}/citations?session_id=${id}`);
         if (citationsRes.ok) {
           const data = await citationsRes.json();
           set({ citations: data || [] });

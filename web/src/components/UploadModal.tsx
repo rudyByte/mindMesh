@@ -10,6 +10,9 @@ interface UploadModalProps {
   onClose: () => void;
 }
 
+const CHUNK_SIZE = 2.5 * 1024 * 1024; // 2.5MB per chunk (safe under Vercel's 4.5MB limit)
+const MAX_SINGLE_UPLOAD = 3.5 * 1024 * 1024; // Use single upload for files <= 3.5MB
+
 export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const [dragActive, setDragActive] = useState(false);
   const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'extracting' | 'building' | 'done' | 'error'>('idle');
@@ -95,6 +98,95 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
     fileInputRef.current?.click();
   };
 
+  const uploadInChunks = async (file: File) => {
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const targetReplaceId = replaceTargetDocId || activeDocumentId;
+
+    // Step 1: Start chunked upload session
+    let startUrl = `${API_BASE_URL}/documents/start-chunked-upload?filename=${encodeURIComponent(file.name)}&total_chunks=${totalChunks}&file_size=${file.size}&session_id=${sessionId}`;
+    if (shouldReplace && targetReplaceId) {
+      startUrl += `&replace_doc_id=${targetReplaceId}`;
+      removeDocument(targetReplaceId);
+      setReplaceTargetDocId(null);
+      setGraphData({ nodes: [], edges: [] });
+      setSelectedNode(null);
+    }
+
+    const startRes = await fetch(startUrl, { method: 'POST' });
+    if (!startRes.ok) {
+      const errText = await startRes.text();
+      throw new Error(`Failed to start upload: HTTP ${startRes.status} - ${errText}`);
+    }
+    const { upload_id } = await startRes.json();
+
+    // Step 2: Upload each chunk
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const chunkBlob = file.slice(start, end);
+
+      const chunkForm = new FormData();
+      chunkForm.append('file', chunkBlob, `chunk-${i}`);
+
+      const chunkRes = await fetch(
+        `${API_BASE_URL}/documents/upload-chunk?upload_id=${upload_id}&chunk_index=${i}`,
+        { method: 'POST', body: chunkForm }
+      );
+
+      if (!chunkRes.ok) {
+        const errText = await chunkRes.text();
+        throw new Error(`Chunk ${i + 1}/${totalChunks} failed: HTTP ${chunkRes.status} - ${errText}`);
+      }
+
+      // Update progress (0-40% during chunk upload)
+      const chunkProgress = Math.round(((i + 1) / totalChunks) * 40);
+      setProgress(chunkProgress);
+    }
+
+    // Step 3: Complete the upload and start processing
+    const completeRes = await fetch(
+      `${API_BASE_URL}/documents/complete-chunked-upload?upload_id=${upload_id}`,
+      { method: 'POST' }
+    );
+
+    if (!completeRes.ok) {
+      const errText = await completeRes.text();
+      throw new Error(`Failed to finalize upload: HTTP ${completeRes.status} - ${errText}`);
+    }
+
+    const uploadData = await completeRes.json();
+    return uploadData;
+  };
+
+  const uploadSingle = async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const targetReplaceId = replaceTargetDocId || activeDocumentId;
+    let uploadUrl = `${API_BASE_URL}/documents/upload?session_id=${sessionId}`;
+    if (shouldReplace && targetReplaceId) {
+      uploadUrl += `&replace_doc_id=${targetReplaceId}`;
+      removeDocument(targetReplaceId);
+      setReplaceTargetDocId(null);
+      setGraphData({ nodes: [], edges: [] });
+      setSelectedNode(null);
+    }
+
+    const response = await fetch(uploadUrl, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      if (response.status === 413) {
+        throw new Error('Upload failed: File too large. The server accepted a maximum of ~4MB. Try a smaller file or split your PDF into chapters.');
+      }
+      throw new Error(`Upload failed: HTTP ${response.status} ${response.statusText}`);
+    }
+
+    return await response.json();
+  };
+
   const processFile = async (file: File) => {
     if (!file.name.endsWith('.pdf')) {
       setUploadState('error');
@@ -104,34 +196,16 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
 
     setFileName(file.name);
     setUploadState('uploading');
-    setProgress(10);
-
-    const formData = new FormData();
-    formData.append('file', file);
+    setProgress(5);
 
     try {
-      const targetReplaceId = replaceTargetDocId || activeDocumentId;
-      let uploadUrl = `${API_BASE_URL}/documents/upload?session_id=${sessionId}`;
-      if (shouldReplace && targetReplaceId) {
-        uploadUrl += `&replace_doc_id=${targetReplaceId}`;
-        removeDocument(targetReplaceId);
-        setReplaceTargetDocId(null); // Clear replacement target after triggering
-        setGraphData({ nodes: [], edges: [] });
-        setSelectedNode(null);
-      }
+      // Use chunked upload for files over 3.5MB, single upload for smaller files
+      const uploadData = file.size > MAX_SINGLE_UPLOAD
+        ? await uploadInChunks(file)
+        : await uploadSingle(file);
 
-      const response = await fetch(uploadUrl, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Upload failed: HTTP ${response.status} ${response.statusText}`);
-      }
-
-      const uploadData = await response.json();
       const docId = uploadData.id;
-      
+
       // Add to store
       addDocument({
         id: docId,
@@ -272,7 +346,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
               <p className="text-sm font-medium text-slate-300 font-sans">
                 Drag and drop your PDF file here, or <span className="text-cyan-400 hover:text-cyan-300 underline font-semibold">browse</span>
               </p>
-              <p className="text-xs text-slate-500 mt-1.5 font-sans">Max size 25MB · Text-based PDF only</p>
+              <p className="text-xs text-slate-500 mt-1.5 font-sans">Supports large files via chunked upload · Text-based PDF only</p>
             </form>
 
             {(activeDocumentId || replaceTargetDocId) && (

@@ -1,0 +1,8 @@
+{
+  "name": "api",
+  "private": true,
+  "scripts": {
+    "build": "echo 'Python FastAPI - build handled by Vercel Python runtime'",
+    "dev": "echo 'Run: python -m uvicorn server.main:app --reload'"
+  }
+}

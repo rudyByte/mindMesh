@@ -21,6 +21,16 @@ logger = logging.getLogger("documents_router")
 # especially in mock mode or for quick polling
 extraction_status_cache = {}
 
+# Chunked upload constants
+CHUNK_SIZE = 2.5 * 1024 * 1024  # 2.5MB per chunk (safe margin under Vercel's 4.5MB limit)
+
+# In-memory storage for chunked upload sessions
+# Key: upload_id, Value: {chunks: {index: bytes}, total: int, filename: str, ..., created_at: float}
+chunked_uploads: dict[str, dict] = {}
+
+MAX_CHUNK_AGE_SECONDS = 600  # 10 minutes — clean up orphaned uploads older than this
+
+
 class UploadResponse(BaseModel):
     id: str
     status: str
@@ -1082,29 +1092,18 @@ def delete_document_internal(doc_id: str, session_id: Optional[str] = None):
         neo4j_client.run_query("MATCH (d:Document {id: $doc_id}) DETACH DELETE d", {"doc_id": doc_id})
         extraction_status_cache.pop(doc_id, None)
 
-@router.post("/documents/upload", response_model=UploadResponse)
-async def upload_document(
-    background_tasks: BackgroundTasks, 
-    file: UploadFile = File(...),
-    session_id: Optional[str] = Query(None),
-    replace_doc_id: Optional[str] = Query(None)
-):
-    if not file.filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF documents are supported.")
-        
-    # Sanitize query parameters if called directly in tests as dependency parameters
-    if not isinstance(session_id, str):
-        session_id = None
-    if not isinstance(replace_doc_id, str):
-        replace_doc_id = None
-        
+def _process_file_upload(
+    file_bytes: bytes,
+    filename: str,
+    session_id: Optional[str],
+    replace_doc_id: Optional[str],
+    background_tasks: BackgroundTasks
+) -> UploadResponse:
+    """Common file upload processing logic shared by direct and chunked uploads."""
     try:
-        # 1. Delete document to be replaced if specified
+        # Delete document to be replaced if specified
         if replace_doc_id:
             delete_document_internal(replace_doc_id, session_id)
-
-        # Read file bytes
-        file_bytes = await file.read()
 
         # Clear state if not multi-document mode
         from server.config import config
@@ -1123,15 +1122,15 @@ async def upload_document(
                     neo4j_client.run_query("MATCH (n) DETACH DELETE n")
                 except Exception as e:
                     logger.error(f"Failed to clear Neo4j on upload: {e}")
-        
+
         # Generate unique document ID
         doc_id = str(uuid.uuid4())
-        path = f"uploads/{doc_id}_{file.filename}"
-        
-        # 1. Upload to Supabase Storage (will save locally in mock mode)
+        path = f"uploads/{doc_id}_{filename}"
+
+        # Upload to Supabase Storage (will save locally in mock mode)
         storage_url = supabase_client.upload_file("documents", path, file_bytes)
-        
-        # 2. Write Document node to Neo4j
+
+        # Write Document node to Neo4j
         upload_date = datetime.datetime.now().isoformat()
         query = """
         MERGE (d:Document {id: $id})
@@ -1142,18 +1141,18 @@ async def upload_document(
         """
         neo4j_client.run_query(query, {
             "id": doc_id,
-            "title": file.filename,
+            "title": filename,
             "upload_date": upload_date,
             "storage_url": storage_url,
             "session_id": session_id
         })
-        
+
         # Also seed Document to mock store if in mock mode
         if neo4j_client.is_mock():
             neo4j_client.mock_nodes[doc_id] = {
                 "id": doc_id,
                 "label": "Document",
-                "title": file.filename,
+                "title": filename,
                 "type": "pdf",
                 "status": "processing",
                 "progress_pct": 10,
@@ -1161,15 +1160,146 @@ async def upload_document(
                 "storage_url": storage_url,
                 "session_id": session_id
             }
-        
+
         # Set initial status in cache
         extraction_status_cache[doc_id] = {"status": "processing", "progress_pct": 10, "error": None}
+
+        # Trigger background task
+        background_tasks.add_task(run_extraction_pipeline, doc_id, file_bytes, filename, session_id)
+
+        return UploadResponse(id=doc_id, status="processing", title=filename)
+    except Exception as e:
+        logger.error(f"Failed to process file upload: {e}")
+        raise
+
+
+class StartChunkedUploadResponse(BaseModel):
+    upload_id: str
+    total_chunks: int
+    chunk_size: int
+
+
+class ChunkUploadResponse(BaseModel):
+    chunk_index: int
+    received: int
+    total: int
+    complete: bool
+
+
+@router.post("/documents/start-chunked-upload")
+async def start_chunked_upload(
+    filename: str = Query(...),
+    total_chunks: int = Query(...),
+    file_size: int = Query(...),
+    session_id: Optional[str] = Query(None),
+    replace_doc_id: Optional[str] = Query(None)
+):
+    if not filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF documents are supported.")
+
+    # Clean up any orphaned upload sessions older than MAX_CHUNK_AGE_SECONDS
+    now = datetime.datetime.now().timestamp()
+    stale_ids = [
+        uid for uid, session in chunked_uploads.items()
+        if now - session.get("created_at", 0) > MAX_CHUNK_AGE_SECONDS
+    ]
+    for stale_id in stale_ids:
+        logger.info(f"Cleaning up stale chunked upload session {stale_id}")
+        del chunked_uploads[stale_id]
+
+    upload_id = str(uuid.uuid4())
+    chunked_uploads[upload_id] = {
+        "chunks": {},
+        "total": total_chunks,
+        "filename": filename,
+        "file_size": file_size,
+        "session_id": session_id,
+        "replace_doc_id": replace_doc_id,
+        "created_at": now
+    }
+    logger.info(f"Started chunked upload {upload_id} for {filename} ({total_chunks} chunks, {file_size} bytes)")
+    return StartChunkedUploadResponse(
+        upload_id=upload_id,
+        total_chunks=total_chunks,
+        chunk_size=CHUNK_SIZE
+    )
+
+
+@router.post("/documents/upload-chunk")
+async def upload_chunk(
+    upload_id: str = Query(...),
+    chunk_index: int = Query(...),
+    file: UploadFile = File(...)
+):
+    if upload_id not in chunked_uploads:
+        raise HTTPException(status_code=404, detail="Upload session not found. Please start a new upload.")
+
+    chunk_data = await file.read()
+    chunked_uploads[upload_id]["chunks"][chunk_index] = chunk_data
+
+    received = len(chunked_uploads[upload_id]["chunks"])
+    total = chunked_uploads[upload_id]["total"]
+
+    logger.info(f"Received chunk {chunk_index + 1}/{total} for upload {upload_id}")
+
+    return ChunkUploadResponse(
+        chunk_index=chunk_index,
+        received=received,
+        total=total,
+        complete=received >= total
+    )
+
+
+@router.post("/documents/complete-chunked-upload", response_model=UploadResponse)
+async def complete_chunked_upload(
+    upload_id: str = Query(...),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
+    if upload_id not in chunked_uploads:
+        raise HTTPException(status_code=404, detail="Upload session not found.")
+
+    upload = chunked_uploads[upload_id]
+
+    # Verify all chunks received
+    if len(upload["chunks"]) < upload["total"]:
+        missing = upload["total"] - len(upload["chunks"])
+        raise HTTPException(status_code=400, detail=f"Missing {missing} chunks. Complete upload first.")
+
+    # Reassemble file from chunks
+    file_bytes = b"".join(upload["chunks"][i] for i in sorted(upload["chunks"].keys()))
+
+    # Clean up the upload session
+    del chunked_uploads[upload_id]
+
+    # Process using the shared helper
+    return _process_file_upload(
+        file_bytes,
+        upload["filename"],
+        upload["session_id"],
+        upload.get("replace_doc_id"),
+        background_tasks
+    )
+
+
+@router.post("/documents/upload", response_model=UploadResponse)
+async def upload_document(
+    background_tasks: BackgroundTasks, 
+    file: UploadFile = File(...),
+    session_id: Optional[str] = Query(None),
+    replace_doc_id: Optional[str] = Query(None)
+):
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF documents are supported.")
         
-        # 3. Trigger background task
-        background_tasks.add_task(run_extraction_pipeline, doc_id, file_bytes, file.filename, session_id)
+    # Sanitize query parameters if called directly in tests as dependency parameters
+    if not isinstance(session_id, str):
+        session_id = None
+    if not isinstance(replace_doc_id, str):
+        replace_doc_id = None
         
-        return UploadResponse(id=doc_id, status="processing", title=file.filename)
-        
+    try:
+        file_bytes = await file.read()
+        return _process_file_upload(file_bytes, file.filename, session_id, replace_doc_id, background_tasks)
     except Exception as e:
         logger.error(f"Failed to upload document: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
