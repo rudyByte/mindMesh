@@ -5,3 +5,4 @@ python-dotenv==1.0.1
 supabase==2.5.1
 pydantic==2.13.4
 python-multipart==0.0.9
+pypdf==4.2.0
