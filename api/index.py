@@ -25,17 +25,10 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
+_server_error = None
+_server_traceback = None
+
 try:
-    import importlib
-    from server.main import app as server_app
-    
-    # Mount all routes from server app into this app
-    for route in server_app.routes:
-        if hasattr(route, "methods") and hasattr(route, "path"):
-            # Can't easily transfer routes, so just include the routers
-            pass
-    
-    # Instead use include_router with all routers
     from server.routers import health, documents, graph, copilot, highlights, notes, citations, paths
     app.include_router(health.router, tags=["Health"])
     app.include_router(documents.router, tags=["Documents"])
@@ -45,16 +38,18 @@ try:
     app.include_router(notes.router, tags=["Notes"])
     app.include_router(citations.router, tags=["Citations"])
     app.include_router(paths.router, tags=["Paths"])
-    
     logger.info("Successfully loaded server routers")
-except Exception as e:
+except Exception as _e:
     import traceback
-    error_detail = traceback.format_exc()
-    logger.error(f"Failed to load server routers: {e}\\{error_detail}")
-    
-    @app.get("/debug/import-error")
-    def debug_import_error():
-        return {"error": str(e), "traceback": error_detail}
+    _server_error = str(_e)
+    _server_traceback = traceback.format_exc()
+    logger.error(f"Failed to load server routers: {_server_error}\\n{_server_traceback}")
+
+@app.get("/debug/import-error")
+def debug_import_error():
+    if _server_error:
+        return {"error": _server_error, "traceback": _server_traceback}
+    return {"message": "No import error - server loaded successfully"}
 
 @app.get("/health")
 def get_health():
