@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from groq import Groq
+from openai import OpenAI
 from server.config import config
 
 logger = logging.getLogger("llm_client")
@@ -13,7 +13,7 @@ class LLMClient:
 
         if config.GROQ_API_KEY and "mock-api-key" not in config.GROQ_API_KEY:
             try:
-                self._client = Groq(api_key=config.GROQ_API_KEY)
+                self._client = OpenAI(api_key=config.GROQ_API_KEY, base_url=config.GROQ_BASE_URL)
                 self._is_mock = False
                 logger.info("Successfully connected to Groq API.")
                 return

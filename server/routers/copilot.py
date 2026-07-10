@@ -5,7 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from groq import AsyncGroq
+from openai import AsyncOpenAI
 
 from server.utils.neo4j_client import neo4j_client
 from server.utils.llm_client import llm_client
@@ -287,7 +287,7 @@ async def generate_live_stream(message: str, context: dict, history: list, user_
 
     try:
         # Groq async streaming client (OpenAI-compatible)
-        aclient = AsyncGroq(api_key=config.GROQ_API_KEY)
+        aclient = AsyncOpenAI(api_key=config.GROQ_API_KEY, base_url=config.GROQ_BASE_URL)
         messages_payload = []
         if system_prompt:
             messages_payload.append({"role": "system", "content": system_prompt})
