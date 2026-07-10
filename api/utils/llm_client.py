@@ -1,8 +1,8 @@
 import json
 import logging
 import re
-from anthropic import Anthropic
-from api.config import config
+from groq import Groq
+from server.config import config
 
 logger = logging.getLogger("llm_client")
 
@@ -10,19 +10,19 @@ class LLMClient:
     def __init__(self):
         self._client = None
         self._is_mock = False
-        
-        if not config.ANTHROPIC_API_KEY or "mock-api-key" in config.ANTHROPIC_API_KEY:
-            logger.warning("Default/mock Anthropic key detected. Starting LLM client in mock mode.")
-            self._is_mock = True
-            return
-            
-        try:
-            self._client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
-            self._is_mock = False
-            logger.info("Successfully connected to Anthropic Claude API.")
-        except Exception as e:
-            logger.warning(f"Failed to initialize Anthropic API client: {e}. Falling back to mock LLM mode.")
-            self._is_mock = True
+
+        if config.GROQ_API_KEY and "mock-api-key" not in config.GROQ_API_KEY:
+            try:
+                self._client = Groq(api_key=config.GROQ_API_KEY)
+                self._is_mock = False
+                logger.info("Successfully connected to Groq API.")
+                return
+            except Exception as e:
+                logger.warning(f"Failed to initialize Groq client: {e}.")
+        else:
+            logger.warning("No valid Groq API key detected. Starting LLM client in mock mode.")
+
+        self._is_mock = True
 
     def extract_graph_from_chunk(self, text_chunk: str) -> dict:
         if self._is_mock:
@@ -49,16 +49,16 @@ class LLMClient:
         )
         
         try:
-            message = self._client.messages.create(
-                model=config.ANTHROPIC_MODEL,
+            response = self._client.chat.completions.create(
+                model=config.GROQ_MODEL,
                 max_tokens=4000,
                 temperature=0,
-                system=system_prompt,
                 messages=[
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Extract graph elements from this text chunk:\n\n{text_chunk}"}
                 ]
             )
-            content = message.content[0].text.strip()
+            content = response.choices[0].message.content.strip()
             
             # Clean markdown JSON fences if LLM generated them
             if content.startswith("```json"):
@@ -93,16 +93,16 @@ class LLMClient:
                     )
                     
                     try:
-                        prereq_message = self._client.messages.create(
-                            model=config.ANTHROPIC_MODEL,
+                        prereq_response = self._client.chat.completions.create(
+                            model=config.GROQ_MODEL,
                             max_tokens=1500,
                             temperature=0.0,
-                            system=prereq_prompt,
                             messages=[
+                                {"role": "system", "content": prereq_prompt},
                                 {"role": "user", "content": f"Text Chunk:\n{text_chunk}\n\nReturn the JSON with prerequisite relationships."}
                             ]
                         )
-                        prereq_content = prereq_message.content[0].text.strip()
+                        prereq_content = prereq_response.choices[0].message.content.strip()
                         if prereq_content.startswith("```json"):
                             prereq_content = prereq_content[7:]
                         if prereq_content.startswith("```"):
@@ -334,16 +334,16 @@ class LLMClient:
             "150 words in total."
         )
         try:
-            message = self._client.messages.create(
-                model=config.ANTHROPIC_MODEL,
+            response = self._client.chat.completions.create(
+                model=config.GROQ_MODEL,
                 max_tokens=1000,
                 temperature=0.5,
-                system=system_prompt,
                 messages=[
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Please narrate this learning path: {concepts_str}"}
                 ]
             )
-            return message.content[0].text.strip()
+            return response.choices[0].message.content.strip()
         except Exception as e:
             logger.error(f"Error during path narration: {e}")
             return self._run_mock_narration(concepts)

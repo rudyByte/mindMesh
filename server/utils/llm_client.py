@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from anthropic import Anthropic
+from groq import Groq
 from server.config import config
 
 logger = logging.getLogger("llm_client")
@@ -239,19 +239,19 @@ class LLMClient:
     def __init__(self):
         self._client = None
         self._is_mock = False
-        
-        if not config.ANTHROPIC_API_KEY or "mock-api-key" in config.ANTHROPIC_API_KEY:
-            logger.warning("Default/mock Anthropic key detected. Starting LLM client in mock mode.")
-            self._is_mock = True
-            return
-            
-        try:
-            self._client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
-            self._is_mock = False
-            logger.info("Successfully connected to Anthropic Claude API.")
-        except Exception as e:
-            logger.warning(f"Failed to initialize Anthropic API client: {e}. Falling back to mock LLM mode.")
-            self._is_mock = True
+
+        if config.GROQ_API_KEY and "mock-api-key" not in config.GROQ_API_KEY:
+            try:
+                self._client = Groq(api_key=config.GROQ_API_KEY)
+                self._is_mock = False
+                logger.info("Successfully connected to Groq API.")
+                return
+            except Exception as e:
+                logger.warning(f"Failed to initialize Groq client: {e}.")
+        else:
+            logger.warning("No valid Groq API key detected. Starting LLM client in mock mode.")
+
+        self._is_mock = True
 
     def identify_main_topic(self, sample_text: str, filename: str) -> dict:
         if self._is_mock:
@@ -267,16 +267,16 @@ class LLMClient:
         )
         
         try:
-            message = self._client.messages.create(
-                model=config.ANTHROPIC_MODEL,
+            response = self._client.chat.completions.create(
+                model=config.GROQ_MODEL,
                 max_tokens=1000,
                 temperature=0,
-                system=system_prompt,
                 messages=[
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Filename: {filename}\n\nText sample:\n\n{sample_text[:8000]}"}
                 ]
             )
-            content = message.content[0].text.strip()
+            content = response.choices[0].message.content.strip()
             
             # Clean markdown JSON fences if LLM generated them
             if content.startswith("```json"):
@@ -365,16 +365,16 @@ class LLMClient:
         )
         
         try:
-            message = self._client.messages.create(
-                model=config.ANTHROPIC_MODEL,
+            response = self._client.chat.completions.create(
+                model=config.GROQ_MODEL,
                 max_tokens=4000,
                 temperature=0,
-                system=system_prompt,
                 messages=[
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Extract graph elements from this text chunk:\n\n{text_chunk}"}
                 ]
             )
-            content = message.content[0].text.strip()
+            content = response.choices[0].message.content.strip()
             
             # Clean markdown JSON fences if LLM generated them
             if content.startswith("```json"):
@@ -409,16 +409,16 @@ class LLMClient:
                     )
                     
                     try:
-                        prereq_message = self._client.messages.create(
-                            model=config.ANTHROPIC_MODEL,
+                        prereq_response = self._client.chat.completions.create(
+                            model=config.GROQ_MODEL,
                             max_tokens=1500,
                             temperature=0.0,
-                            system=prereq_prompt,
                             messages=[
+                                {"role": "system", "content": prereq_prompt},
                                 {"role": "user", "content": f"Text Chunk:\n{text_chunk}\n\nReturn the JSON with prerequisite relationships."}
                             ]
                         )
-                        prereq_content = prereq_message.content[0].text.strip()
+                        prereq_content = prereq_response.choices[0].message.content.strip()
                         if prereq_content.startswith("```json"):
                             prereq_content = prereq_content[7:]
                         if prereq_content.startswith("```"):
@@ -496,16 +496,16 @@ class LLMClient:
         )
         
         try:
-            message = self._client.messages.create(
-                model=config.ANTHROPIC_MODEL,
+            response = self._client.chat.completions.create(
+                model=config.GROQ_MODEL,
                 max_tokens=4000,
                 temperature=0,
-                system=system_prompt,
                 messages=[
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Extract citations from this references block:\n\n{text_block}"}
                 ]
             )
-            content = message.content[0].text.strip()
+            content = response.choices[0].message.content.strip()
             
             # Clean markdown JSON fences if LLM generated them
             if content.startswith("```json"):
@@ -822,16 +822,16 @@ class LLMClient:
             "150 words in total."
         )
         try:
-            message = self._client.messages.create(
-                model=config.ANTHROPIC_MODEL,
+            response = self._client.chat.completions.create(
+                model=config.GROQ_MODEL,
                 max_tokens=1000,
                 temperature=0.5,
-                system=system_prompt,
                 messages=[
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Please narrate this learning path: {concepts_str}"}
                 ]
             )
-            return message.content[0].text.strip()
+            return response.choices[0].message.content.strip()
         except Exception as e:
             logger.error(f"Error during path narration: {e}")
             return self._run_mock_narration(concepts)
@@ -898,16 +898,16 @@ class LLMClient:
             "unless those are genuine academic concepts. Do not return any other text."
         )
         try:
-            message = self._client.messages.create(
-                model=config.ANTHROPIC_MODEL,
+            response = self._client.chat.completions.create(
+                model=config.GROQ_MODEL,
                 max_tokens=500,
                 temperature=0.3,
-                system=system_prompt,
                 messages=[
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": "Return the JSON array of prerequisite concepts."}
                 ]
             )
-            content = message.content[0].text.strip()
+            content = response.choices[0].message.content.strip()
             if "```" in content:
                 content = content.split("```")[1]
                 if content.startswith("json"):
@@ -926,16 +926,16 @@ class LLMClient:
             f"'{concept}'. Focus on what it is and why it's important. Do not use formatting or markdown headers."
         )
         try:
-            message = self._client.messages.create(
-                model=config.ANTHROPIC_MODEL,
+            response = self._client.chat.completions.create(
+                model=config.GROQ_MODEL,
                 max_tokens=300,
                 temperature=0.3,
-                system=system_prompt,
                 messages=[
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": "Explain the concept concisely."}
                 ]
             )
-            return message.content[0].text.strip()
+            return response.choices[0].message.content.strip()
         except Exception as e:
             logger.error(f"Failed to generate explanation from LLM: {str(e)}")
             return "Explanation could not be generated."
@@ -976,17 +976,17 @@ class LLMClient:
         )
         
         try:
-            message = self._client.messages.create(
-                model=config.ANTHROPIC_MODEL,
+            response = self._client.chat.completions.create(
+                model=config.GROQ_MODEL,
                 max_tokens=1500,
                 temperature=0.0,
-                system=system_prompt,
                 messages=[
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Concepts list: {json.dumps(concepts)}\nReturn ONLY valid JSON."}
                 ]
             )
             
-            response_text = message.content[0].text.strip()
+            response_text = response.choices[0].message.content.strip()
             # Clean markdown formatting if present
             if response_text.startswith("```"):
                 response_text = re.sub(r"^```(?:json)?", "", response_text)
@@ -1053,17 +1053,17 @@ class LLMClient:
         )
         
         try:
-            message = self._client.messages.create(
-                model=config.ANTHROPIC_MODEL,
+            response = self._client.chat.completions.create(
+                model=config.GROQ_MODEL,
                 max_tokens=800,
                 temperature=0.0,
-                system=system_prompt,
                 messages=[
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Target Concept: '{target_concept}'\nAvailable Concepts: {json.dumps(available_concepts)}\nReturn ONLY valid JSON."}
                 ]
             )
             
-            response_text = message.content[0].text.strip()
+            response_text = response.choices[0].message.content.strip()
             if response_text.startswith("```"):
                 response_text = re.sub(r"^```(?:json)?", "", response_text)
                 response_text = re.sub(r"```$", "", response_text).strip()
@@ -1140,17 +1140,17 @@ class LLMClient:
         )
 
         try:
-            message = self._client.messages.create(
-                model=config.ANTHROPIC_MODEL,
+            response = self._client.chat.completions.create(
+                model=config.GROQ_MODEL,
                 max_tokens=1500,
                 temperature=0.2,
-                system=system_prompt,
                 messages=[
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Target topic: {target_concept}\nReturn ONLY valid JSON."}
                 ]
             )
 
-            response_text = message.content[0].text.strip()
+            response_text = response.choices[0].message.content.strip()
             if response_text.startswith("```"):
                 import re
                 response_text = re.sub(r"^```(?:json)?", "", response_text)
@@ -1177,17 +1177,17 @@ class LLMClient:
         )
         try:
             # Bypass mock mode check to force real LLM generation
-            client = self._client if self._client else Anthropic(api_key=config.ANTHROPIC_API_KEY)
-            message = client.messages.create(
-                model=config.ANTHROPIC_MODEL,
+            client = self._client if self._client else Groq(api_key=config.GROQ_API_KEY)
+            response = client.chat.completions.create(
+                model=config.GROQ_MODEL,
                 max_tokens=800,
                 temperature=0.2,
-                system=system_prompt,
                 messages=[
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Concept: {concept_name}\nReturn ONLY valid JSON."}
                 ]
             )
-            response_text = message.content[0].text.strip()
+            response_text = response.choices[0].message.content.strip()
             if response_text.startswith("```"):
                 import re
                 response_text = re.sub(r"^```(?:json)?", "", response_text)

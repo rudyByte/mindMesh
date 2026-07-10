@@ -13,8 +13,13 @@ app = FastAPI(title="MindMesh API", version="1.0.0")
 # Setup CORS to allow Next.js dev server access with any local port
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        # Allow the deployed Vercel frontend (dynamic via env var or wildcard)
+        os.getenv("VERCEL_APP_URL", "https://mindmesh.vercel.app"),
+    ],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?|https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

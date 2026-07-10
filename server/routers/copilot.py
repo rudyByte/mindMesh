@@ -5,7 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from anthropic import AsyncAnthropic
+from groq import AsyncGroq
 
 from server.utils.neo4j_client import neo4j_client
 from server.utils.llm_client import llm_client
@@ -286,22 +286,25 @@ async def generate_live_stream(message: str, context: dict, history: list, user_
     )
 
     try:
-        # Anthropic async client stream
-        aclient = AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
+        # Groq async streaming client (OpenAI-compatible)
+        aclient = AsyncGroq(api_key=config.GROQ_API_KEY)
         messages_payload = []
+        if system_prompt:
+            messages_payload.append({"role": "system", "content": system_prompt})
         for h in history:
             messages_payload.append({"role": h.role, "content": h.content})
         messages_payload.append({"role": "user", "content": message})
-        
-        async with aclient.messages.stream(
-            model=config.ANTHROPIC_MODEL,
+
+        stream = await aclient.chat.completions.create(
+            model=config.GROQ_MODEL,
             max_tokens=2000,
             temperature=0.2,
-            system=system_prompt,
-            messages=messages_payload
-        ) as stream:
-            async for event in stream.text_stream:
-                yield event
+            messages=messages_payload,
+            stream=True
+        )
+        async for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
     except Exception as e:
         logger.error(f"Error during live Copilot stream: {e}")
         # Fallback to simulated message if API fails
@@ -316,9 +319,10 @@ async def chat_copilot(request: ChatRequest):
     if request.node_id:
         context = get_node_graphrag_context(request.node_id, request.session_id, request.document_id)
         
-    is_mock = not config.ANTHROPIC_API_KEY or "mock-api-key" in config.ANTHROPIC_API_KEY
+    # Use live mode if Groq key is available, otherwise fall back to mock streaming
+    use_live = bool(config.GROQ_API_KEY) and "mock-api-key" not in config.GROQ_API_KEY
     
-    if is_mock:
+    if not use_live:
         return StreamingResponse(
             generate_mock_stream(request.message, context),
             media_type="text/plain"

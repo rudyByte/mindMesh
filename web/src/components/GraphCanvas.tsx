@@ -408,12 +408,12 @@ export default function GraphCanvas() {
   const handleNodeClick = async (node: any) => {
     if (!node || !node.id) return;
     const clickedNode: GraphNode = {
+      ...node,
       id: node.id,
       label: node.label,
       name: node.name || node.title || 'Unknown',
       description: node.description || '',
       difficulty_level: node.difficulty_level || 'Beginner',
-      ...node
     };
     setSelectedNode(clickedNode);
     setIsOverlayOpen(true);
@@ -781,12 +781,12 @@ export default function GraphCanvas() {
 
           // Immediately update state with basic info so it doesn't crash the panel
           const basicNode = {
+            ...node,
             id: fallbackId,
             label: node.label || 'Concept',
             name: conceptName,
             description: node.description || '',
             difficulty_level: node.difficulty_level || 'Beginner',
-            ...node
           } as GraphNode;
           
           setSelectedNode(basicNode);
