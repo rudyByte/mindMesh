@@ -56,6 +56,70 @@ def _blob_path_from_storage_url(url: str) -> Optional[str]:
     return None
 
 
+def _json_blob_path(kind: str, key: str) -> str:
+    safe_key = re.sub(r"[^a-zA-Z0-9_.-]", "_", key)
+    return f"state/{kind}/{safe_key}.json"
+
+
+def _save_json_state(kind: str, key: str, payload: dict | list) -> None:
+    if not vercel_blob_client.is_configured():
+        return
+    vercel_blob_client.put(
+        _json_blob_path(kind, key),
+        json.dumps(payload).encode("utf-8"),
+        "application/json",
+    )
+
+
+def _load_json_state(kind: str, key: str):
+    if not vercel_blob_client.is_configured():
+        return None
+    try:
+        raw = vercel_blob_client.get(_json_blob_path(kind, key))
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _save_doc_status(doc_id: str, status: str, progress_pct: int, error: Optional[str] = None, session_id: Optional[str] = None) -> None:
+    extraction_status_cache[doc_id] = {"status": status, "progress_pct": progress_pct, "error": error}
+    _save_json_state("doc-status", doc_id, {
+        "id": doc_id,
+        "session_id": session_id,
+        "status": status,
+        "progress_pct": progress_pct,
+        "error": error,
+    })
+
+
+def _save_session_doc(session_id: Optional[str], doc: dict) -> None:
+    if not session_id:
+        return
+    docs = _load_json_state("session-docs", session_id) or []
+    docs = [d for d in docs if d.get("id") != doc.get("id")]
+    docs.insert(0, doc)
+    _save_json_state("session-docs", session_id, docs)
+
+
+def _persist_mock_session_graph(session_id: Optional[str]) -> None:
+    if not session_id or not neo4j_client.is_mock():
+        return
+    nodes = []
+    node_ids = set()
+    for nid, n in neo4j_client.mock_nodes.items():
+        if n.get("session_id") == session_id and n.get("label") not in ["Document", "Note", "Highlight", "Citation"]:
+            node = dict(n)
+            if not node.get("name") and node.get("title"):
+                node["name"] = node["title"]
+            nodes.append(node)
+            node_ids.add(nid)
+    edges = [
+        e for e in neo4j_client.mock_edges
+        if e.get("session_id") == session_id and e.get("type") != "CONTAINS"
+    ]
+    _save_json_state("session-graph", session_id, {"nodes": nodes, "edges": edges})
+
+
 def _save_chunk_session(upload_id: str, session: dict) -> None:
     """Persist chunk metadata so Vercel serverless instances can share it."""
     meta = {k: v for k, v in session.items() if k != "chunks"}
@@ -333,7 +397,7 @@ def cluster_and_merge_nodes(nodes: list) -> tuple[list, dict]:
     return canonical_nodes, name_mapping
 
 def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, session_id: str):
-    extraction_status_cache[doc_id] = {"status": "processing", "progress_pct": 10, "error": None}
+    _save_doc_status(doc_id, "processing", 10, None, session_id)
     
     try:
         # 1. Parse and clean PDF text
@@ -342,7 +406,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         if not text:
             raise ValueError("This looks like a scanned PDF — text extraction isn't supported yet.")
             
-        extraction_status_cache[doc_id]["progress_pct"] = 30
+        _save_doc_status(doc_id, "processing", 30, None, session_id)
         
         # Identify main topic of the document
         main_topic_info = llm_client.identify_main_topic(text[:15000], filename)
@@ -362,7 +426,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             start += chunk_size - overlap
             
         logger.info(f"Split document into {len(chunks)} chunks.")
-        extraction_status_cache[doc_id]["progress_pct"] = 40
+        _save_doc_status(doc_id, "processing", 40, None, session_id)
         
         # 3. For each chunk, extract nodes/relationships using LLM client
         all_nodes = []
@@ -410,7 +474,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             
             # Update progress
             current_progress = int(40 + (i + 1) * step_increment)
-            extraction_status_cache[doc_id]["progress_pct"] = min(90, current_progress)
+            _save_doc_status(doc_id, "processing", min(90, current_progress), None, session_id)
             
         # Implement explicit Regex/Stop-Word Blacklist for broken or non-academic terms
         STOP_WORDS_BLACKLIST = {"become", "becomes", "became", "want", "learn", "how", "to", "the", "with", "variabl"}
@@ -1053,7 +1117,14 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                     })
                     
         # Update status to done
-        extraction_status_cache[doc_id] = {"status": "done", "progress_pct": 100, "error": None}
+        _persist_mock_session_graph(session_id)
+        _save_doc_status(doc_id, "done", 100, None, session_id)
+        _save_session_doc(session_id, {
+            "id": doc_id,
+            "title": filename,
+            "status": "done",
+            "progress_pct": 100,
+        })
         
         # Save completed status to Neo4j node
         neo4j_client.run_query(
@@ -1065,7 +1136,14 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
     except Exception as e:
         logger.error(f"Extraction failed for document {doc_id}: {e}")
         error_msg = str(e)
-        extraction_status_cache[doc_id] = {"status": "error", "progress_pct": 100, "error": error_msg}
+        _persist_mock_session_graph(session_id)
+        _save_doc_status(doc_id, "error", 100, error_msg, session_id)
+        _save_session_doc(session_id, {
+            "id": doc_id,
+            "title": filename,
+            "status": "error",
+            "progress_pct": 100,
+        })
         
         # Clean up any partial nodes or relationships created during this failed run to prevent contamination
         try:
@@ -1245,8 +1323,14 @@ def _process_file_upload(
                 "session_id": session_id
             }
 
-        # Set initial status in cache
-        extraction_status_cache[doc_id] = {"status": "processing", "progress_pct": 10, "error": None}
+        # Set initial status/doc list in durable state as well as local cache.
+        _save_doc_status(doc_id, "processing", 10, None, session_id)
+        _save_session_doc(session_id, {
+            "id": doc_id,
+            "title": filename,
+            "status": "processing",
+            "progress_pct": 10,
+        })
 
         # Trigger background task
         background_tasks.add_task(run_extraction_pipeline, doc_id, file_bytes, filename, session_id)
@@ -1441,6 +1525,16 @@ def get_document_status(id: str, session_id: Optional[str] = Query(None)):
     status = extraction_status_cache.get(id)
     if status:
         return StatusResponse(**status)
+
+    persisted_status = _load_json_state("doc-status", id)
+    if persisted_status:
+        if session_id and persisted_status.get("session_id") != session_id:
+            raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
+        return StatusResponse(
+            status=persisted_status.get("status") or "processing",
+            progress_pct=persisted_status.get("progress_pct") or 10,
+            error=persisted_status.get("error")
+        )
         
     # Check database next
     query = "MATCH (d:Document {id: $id}) RETURN d.status as status, d.progress_pct as progress_pct, d.error_msg as error_msg"
@@ -1475,6 +1569,18 @@ def get_document_graph(id: str, session_id: Optional[str] = Query(None)):
     multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False)
 
     if neo4j_client.is_mock():
+        if not neo4j_client.mock_nodes:
+            persisted_status = _load_json_state("doc-status", id)
+            persisted_graph = _load_json_state("session-graph", persisted_status.get("session_id")) if persisted_status else None
+            if persisted_graph:
+                nodes = [n for n in persisted_graph.get("nodes", []) if n.get("doc_id") == id]
+                node_ids = {n.get("id") for n in nodes}
+                edges = [
+                    e for e in persisted_graph.get("edges", [])
+                    if e.get("doc_id") == id or (e.get("from") in node_ids and e.get("to") in node_ids)
+                ]
+                return {"nodes": nodes, "edges": edges}
+
         # Find all mock nodes containing relationships with this document ID
         doc_node_ids = set()
         for edge in neo4j_client.mock_edges:
@@ -1586,6 +1692,13 @@ def get_session_graph(session_id: str):
             e for e in neo4j_client.mock_edges 
             if e["type"] != "CONTAINS" and e.get("session_id") == session_id
         ]
+        if not session_nodes and not session_edges:
+            persisted_graph = _load_json_state("session-graph", session_id)
+            if persisted_graph:
+                return {
+                    "nodes": persisted_graph.get("nodes", []),
+                    "edges": persisted_graph.get("edges", [])
+                }
         return {"nodes": session_nodes, "edges": session_edges}
 
     # Real Neo4j Mode
@@ -1741,6 +1854,10 @@ def get_session_documents(session_id: str):
                     "status": n.get("status", "done"),
                     "progress_pct": n.get("progress_pct", 100)
                 })
+        if not docs:
+            persisted_docs = _load_json_state("session-docs", session_id)
+            if persisted_docs:
+                return persisted_docs
         return docs
 
     # Real Neo4j Mode
