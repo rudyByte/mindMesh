@@ -11,7 +11,7 @@ from pypdf import PdfReader
 from server.utils.neo4j_client import neo4j_client
 from server.utils.supabase_client import supabase_client
 from server.utils.vercel_blob_client import vercel_blob_client
-from server.utils.llm_client import llm_client, calculate_entity_quality, singularize_concept_name, normalize_and_clean_concept_name
+from server.utils.llm_client import llm_client, calculate_entity_quality, singularize_concept_name, normalize_and_clean_concept_name, GENERIC_BLACKLIST
 from server.utils.sequence_parser import parse_learning_sequences
 from server.utils.text_cleaner import clean_pdf_text_from_bytes
 import re
@@ -117,6 +117,19 @@ def _persist_mock_session_graph(session_id: Optional[str]) -> None:
         e for e in neo4j_client.mock_edges
         if e.get("session_id") == session_id and e.get("type") != "CONTAINS"
     ]
+    level_y = {"foundation": -220, "core": 0, "advanced": 220}
+    buckets: dict[str, list[dict]] = {"foundation": [], "core": [], "advanced": []}
+    for node in nodes:
+        lvl = (node.get("level") or "core").lower()
+        if lvl not in buckets:
+            lvl = "core"
+            node["level"] = lvl
+        buckets[lvl].append(node)
+    for lvl, bucket in buckets.items():
+        count = max(1, len(bucket))
+        for i, node in enumerate(bucket):
+            node.setdefault("y", level_y[lvl])
+            node.setdefault("x", (i - (count - 1) / 2) * 150)
     _save_json_state("session-graph", session_id, {"nodes": nodes, "edges": edges})
 
 
@@ -406,93 +419,82 @@ def _sentence_for_term(text: str, term: str) -> str:
 
 
 def _build_fast_grounded_graph(text: str, filename: str, main_topic_info: dict) -> dict:
-    """Serverless-safe grounded graph extraction for larger PDFs.
+    return _build_dynamic_fallback_graph(text, filename, main_topic_info)
 
-    This avoids many serial LLM calls on Vercel while still grounding nodes in
-    the actual document text.
-    """
-    text_lower = text.lower()
-    topic_name = main_topic_info.get("name") or filename.rsplit(".", 1)[0].replace("_", " ").title()
-    candidates = [
-        ("Concept", "Ohm's Law", ["ohm's law", "ohms law", "ohm law"]),
-        ("Concept", "Voltage", ["voltage", "volt"]),
-        ("Concept", "Current", ["current", "ampere", "ammeter"]),
-        ("Concept", "Resistance", ["resistance", "resistor", "ohm"]),
-        ("Technology", "Circuit", ["circuit", "closed loop"]),
-        ("Technology", "Voltmeter", ["voltmeter", "digital voltmeter"]),
-        ("Technology", "Ammeter", ["ammeter", "digital ammeter"]),
-        ("Technology", "Resistor", ["resistor", "resistors"]),
-        ("Technology", "Breadboard", ["breadboard"]),
-        ("Concept", "Series Circuit", ["series circuit"]),
-        ("Concept", "Electric Power", ["electric power", "power"]),
-        ("Concept", "Charge", ["charge", "electric charge"]),
-        ("Method", "Lab Measurement", ["measure", "measurement", "test"]),
-        ("Application", "DC Circuit Analysis", ["dc voltage", "dc current", "dc"]),
-    ]
 
+def _sample_document_text(text: str, max_chars: int = 9000) -> str:
+    clean = re.sub(r"\s+", " ", text).strip()
+    if len(clean) <= max_chars:
+        return clean
+    third = max_chars // 3
+    mid_start = max(0, len(clean) // 2 - third // 2)
+    return "\n\n".join([clean[:third], clean[mid_start:mid_start + third], clean[-third:]])
+
+
+def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dict) -> dict:
+    """LLM-free, document-local hierarchy. No fixed PDFs or domain templates."""
+    topic_name = main_topic_info.get("name") or filename.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").title()
+    topic_desc = main_topic_info.get("description") or f"{topic_name} is the main topic extracted from {filename}."
+    stop = {
+        "abstract", "introduction", "conclusion", "references", "figure", "table", "chapter", "section",
+        "page", "pages", "objective", "objectives", "procedure", "result", "results", "discussion",
+        "example", "examples", "question", "questions", "answer", "answers", "exercise", "exercises",
+        "using", "use", "used", "attach", "attached", "connect", "connected", "disconnect", "record",
+        "observe", "calculate", "write", "last", "next", "first", "second", "third", "green", "red",
+        "blue", "black", "white", "wire", "wires", "january", "february", "march", "april", "may",
+        "june", "july", "august", "september", "october", "november", "december"
+    } | GENERIC_BLACKLIST
+    phrase_counts: dict[str, int] = {}
+    for pattern in [
+        r"\b[A-Z][A-Za-z][A-Za-z'’/-]*(?:\s+[A-Z][A-Za-z][A-Za-z'’/-]*){0,3}\b",
+        r"\b[a-z][a-z]{3,}(?:\s+[a-z][a-z]{3,}){1,3}\b",
+    ]:
+        for raw in re.findall(pattern, text):
+            name = normalize_and_clean_concept_name(raw)
+            if not name or len(name) > 40 or len(name.split()) > 4:
+                continue
+            low = name.lower()
+            if low in stop or any(w in stop for w in low.split()):
+                continue
+            if re.search(r"\b(using|attach|connect|record|observe|calculate|step|last|next)\b", low):
+                continue
+            if len(name.split()) == 1 and low.endswith(("ing", "ed")):
+                continue
+            if calculate_entity_quality(name, "Concept") <= 0.7:
+                continue
+            phrase_counts[name] = phrase_counts.get(name, 0) + 1
+
+    ranked = sorted(phrase_counts.items(), key=lambda item: (item[1], len(item[0])), reverse=True)[:14]
     nodes = [{
         "label": "Topic",
         "name": topic_name,
-        "description": main_topic_info.get("description") or f"{topic_name} is the main topic extracted from {filename}.",
+        "description": topic_desc,
         "difficulty_level": "Beginner",
+        "level": "core",
     }]
+    for i, (name, _) in enumerate(ranked):
+        nodes.append({
+            "label": "Concept",
+            "name": name,
+            "description": _sentence_for_term(text, name),
+            "difficulty_level": "Beginner" if i < 5 else "Intermediate",
+            "level": "foundation" if i < 4 else ("advanced" if i > 9 else "core"),
+        })
 
-    seen = {topic_name.lower()}
-    for label, name, aliases in candidates:
-        if any(alias in text_lower for alias in aliases) and name.lower() not in seen:
-            nodes.append({
-                "label": label,
-                "name": name,
-                "description": _sentence_for_term(text, aliases[0]),
-                "difficulty_level": "Beginner",
-            })
-            seen.add(name.lower())
-
-    # Generic fallback for non-physics documents: add frequent title-case terms.
-    if len(nodes) < 6:
-        matches = re.findall(r"\b[A-Z][A-Za-z][A-Za-z'’-]*(?:\s+[A-Z][A-Za-z][A-Za-z'’-]*){0,2}\b", text)
-        counts: dict[str, int] = {}
-        for match in matches:
-            clean = match.strip()
-            if clean.lower() in seen or len(clean) > 40:
-                continue
-            if clean.lower() in {"physics", "objectives", "background", "procedure"}:
-                continue
-            counts[clean] = counts.get(clean, 0) + 1
-        for name, _ in sorted(counts.items(), key=lambda item: item[1], reverse=True)[:10]:
-            nodes.append({
-                "label": "Concept",
-                "name": name,
-                "description": _sentence_for_term(text, name),
-                "difficulty_level": "Beginner",
-            })
-            seen.add(name.lower())
-            if len(nodes) >= 12:
-                break
-
-    relationships = []
-    node_names = {node["name"] for node in nodes}
-
-    def add_rel(source: str, target: str, rel_type: str):
-        if source in node_names and target in node_names and source != target:
-            relationships.append({"from": source, "to": target, "type": rel_type})
-
+    rels = []
+    seen = set()
     for node in nodes[1:]:
-        relationships.append({"from": topic_name, "to": node["name"], "type": "CONTAINS"})
+        level = node.get("level")
+        rel = "PREREQUISITE" if level == "foundation" else ("EXTENDS" if level == "advanced" else "CONTAINS")
+        source, target = (node["name"], topic_name) if level == "foundation" else (topic_name, node["name"])
+        key = (source, target, rel)
+        if key not in seen:
+            seen.add(key)
+            rels.append({"from": source, "to": target, "type": rel})
 
-    add_rel("Voltage", "Ohm's Law", "PREREQUISITE")
-    add_rel("Current", "Ohm's Law", "PREREQUISITE")
-    add_rel("Resistance", "Ohm's Law", "PREREQUISITE")
-    add_rel("Circuit", "Voltage", "RELATED_TO")
-    add_rel("Circuit", "Current", "RELATED_TO")
-    add_rel("Resistor", "Resistance", "RELATED_TO")
-    add_rel("Voltmeter", "Voltage", "USES")
-    add_rel("Ammeter", "Current", "USES")
-    add_rel("Lab Measurement", "Ohm's Law", "USED_FOR")
-    add_rel("Series Circuit", "Circuit", "PART_OF")
-    add_rel("DC Circuit Analysis", "Circuit", "USED_FOR")
+    return {"nodes": nodes, "relationships": rels}
 
-    return {"nodes": nodes, "relationships": relationships}
+
 
 def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, session_id: str):
     _save_doc_status(doc_id, "processing", 10, None, session_id)
@@ -532,8 +534,16 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
 
         use_fast_extraction = vercel_blob_client.is_configured() and (len(chunks) > 3 or len(file_bytes) > 3 * 1024 * 1024)
         if use_fast_extraction:
-            logger.info(f"Using serverless-safe fast extraction for {filename}: {len(chunks)} chunks, {len(file_bytes)} bytes")
-            fast_result = _build_fast_grounded_graph(text, filename, main_topic_info)
+            logger.info(f"Using serverless-safe hierarchical extraction for {filename}: {len(chunks)} chunks, {len(file_bytes)} bytes")
+            try:
+                fast_result = llm_client.extract_hierarchical_graph_from_document(
+                    _sample_document_text(text),
+                    filename,
+                    main_topic_info,
+                )
+            except Exception:
+                logger.warning("Falling back to local dynamic hierarchy extraction.")
+                fast_result = _build_dynamic_fallback_graph(text, filename, main_topic_info)
             all_nodes = fast_result.get("nodes", [])
             all_relationships = fast_result.get("relationships", [])
             _save_doc_status(doc_id, "processing", 90, None, session_id)
@@ -647,44 +657,16 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             "label": "Topic",
             "name": main_topic_info.get("name", "Document Main Topic"),
             "description": main_topic_info.get("description", ""),
-            "difficulty_level": "Beginner"
+            "difficulty_level": "Beginner",
+            "level": "core"
         }
         
         # Add central node to the list of nodes
         all_nodes.append(central_node)
         
-        # Session-wide node merging: if in a session, retrieve and merge with existing session nodes
+        # Per-upload isolation: do not merge nodes from older PDFs in the same browser session.
+        # This prevents graph contamination when a student uploads a new document.
         existing_nodes = []
-        if session_id:
-            try:
-                if neo4j_client.is_mock():
-                    for mn in neo4j_client.mock_nodes.values():
-                        if mn.get("session_id") == session_id and mn.get("label") not in ["Document", "Note", "Highlight", "Citation"]:
-                            existing_nodes.append({
-                                "label": mn.get("label", "Concept"),
-                                "name": mn.get("name") or mn.get("title") or "",
-                                "description": mn.get("description", ""),
-                                "difficulty_level": mn.get("difficulty_level", "Beginner"),
-                                "is_existing": True
-                            })
-                else:
-                    query = """
-                    MATCH (n)
-                    WHERE n.session_id = $session_id AND NOT n:Document AND NOT n:Note AND NOT n:Highlight AND NOT n:Citation
-                    RETURN labels(n)[0] as label, coalesce(n.name, n.title) as name, n.description as description, n.difficulty_level as difficulty_level
-                    """
-                    res = neo4j_client.run_query(query, {"session_id": session_id})
-                    for r in res:
-                        existing_nodes.append({
-                            "label": r.get("label") or "Concept",
-                            "name": r.get("name") or "",
-                            "description": r.get("description") or "",
-                            "difficulty_level": r.get("difficulty_level") or "Beginner",
-                            "is_existing": True
-                        })
-                logger.info(f"Retrieved {len(existing_nodes)} existing nodes from session {session_id} for combined merging.")
-            except Exception as e:
-                logger.error(f"Failed to fetch existing session nodes for merging: {e}")
 
         all_nodes_combined = existing_nodes + all_nodes
 
@@ -695,7 +677,10 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         original_count = len(canonical_nodes)
         
         if not neo4j_client.is_mock():
-            canonical_nodes = [n for n in canonical_nodes if is_concept_in_text(n.get("name", ""), text)]
+            canonical_nodes = [
+                n for n in canonical_nodes
+                if n.get("level") == "foundation" or is_concept_in_text(n.get("name", ""), text)
+            ]
             logger.info(f"Filtered out {original_count - len(canonical_nodes)} nodes not present in the document text.")
         else:
             logger.info("[MOCK] Skipping text grounding filter to preserve complete mock graph.")
@@ -1030,6 +1015,32 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             adj.setdefault(paper_key, set()).add(anchor_key)
             adj.setdefault(anchor_key, set()).add(paper_key)
 
+        # Infer hierarchy levels after merging so the visual graph can lay out as:
+        # prerequisites above -> core topic center -> advanced/application nodes below.
+        node_by_name = {n.get("name", "").lower().strip(): n for n in canonical_nodes if n.get("name")}
+        central_key = resolved_central_name.lower().strip()
+        if central_key in node_by_name:
+            node_by_name[central_key]["level"] = "core"
+        for rel in final_relationships:
+            f_key = rel.get("from", "").lower().strip()
+            t_key = rel.get("to", "").lower().strip()
+            r_type = rel.get("type", "").upper()
+            if r_type in ["PREREQUISITE", "PREREQUISITE_OF"]:
+                if f_key in node_by_name:
+                    node_by_name[f_key]["level"] = "foundation"
+                if t_key in node_by_name and not node_by_name[t_key].get("level"):
+                    node_by_name[t_key]["level"] = "core"
+            elif r_type == "EXTENDS":
+                if f_key in node_by_name and not node_by_name[f_key].get("level"):
+                    node_by_name[f_key]["level"] = "core"
+                if t_key in node_by_name:
+                    node_by_name[t_key]["level"] = "advanced"
+            elif r_type in ["USED_FOR", "EVALUATED_ON", "CITES", "AUTHORED_BY"]:
+                if t_key in node_by_name and not node_by_name[t_key].get("level"):
+                    node_by_name[t_key]["level"] = "advanced"
+        for n in canonical_nodes:
+            n.setdefault("level", "advanced" if n.get("label") in ["Paper", "Author", "Dataset"] else "core")
+
         # Log top extracted concepts and relationships
         logger.info("=== TOP EXTRACTED KNOWLEDGE GRAPH ELEMENTS ===")
         sorted_nodes_log = sorted(canonical_nodes, key=lambda x: len(adj.get(x["name"].lower().strip(), set())), reverse=True)
@@ -1152,6 +1163,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                     resolved_id = existing_id
                     if not neo4j_client.mock_nodes[resolved_id].get("description"):
                         neo4j_client.mock_nodes[resolved_id]["description"] = desc
+                    if node.get("level"):
+                        neo4j_client.mock_nodes[resolved_id]["level"] = node["level"]
                 else:
                     resolved_id = node_id
                     node_data = {
@@ -1163,6 +1176,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                         "doc_id": doc_id,
                         "session_id": session_id
                     }
+                    if node.get("level"):
+                        node_data["level"] = node["level"]
                     if label == "Paper":
                         node_data["title"] = name
                         if "year" in node:
@@ -1389,6 +1404,31 @@ def _process_file_upload(
         # Generate unique document ID
         doc_id = str(uuid.uuid4())
         path = f"uploads/{doc_id}_{filename}"
+
+        if session_id:
+            _save_json_state("session-graph", session_id, {"nodes": [], "edges": []})
+            _save_json_state("session-docs", session_id, [])
+            if neo4j_client.is_mock():
+                old_ids = {
+                    nid for nid, n in neo4j_client.mock_nodes.items()
+                    if n.get("session_id") == session_id and n.get("label") != "Document"
+                }
+                neo4j_client.mock_nodes = {
+                    nid: n for nid, n in neo4j_client.mock_nodes.items()
+                    if n.get("session_id") != session_id
+                }
+                neo4j_client.mock_edges = [
+                    e for e in neo4j_client.mock_edges
+                    if e.get("session_id") != session_id and e.get("from") not in old_ids and e.get("to") not in old_ids
+                ]
+            else:
+                try:
+                    neo4j_client.run_query(
+                        "MATCH (n) WHERE n.session_id = $session_id DETACH DELETE n",
+                        {"session_id": session_id},
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to clear previous session graph before upload: {e}")
 
         # Upload to durable storage. On Vercel, Blob is available and serverless-safe;
         # Supabase remains the fallback for local/dev deployments configured with it.

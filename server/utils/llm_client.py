@@ -332,7 +332,7 @@ class LLMClient:
             "Extract paper-specific hierarchical, causal, and structural relationships using only these types:\n"
             "- CONTAINS: For hierarchical structures (e.g., Topic contains Subtopic, or Framework contains Concept).\n"
             "- PART_OF: For concepts that are a component or part of a larger concept (e.g., Engine PART_OF Car).\n"
-            "- PREREQUISITE: For foundational concepts required before learning another concept (e.g., Concept A must be understood before Concept B. Voltage -> PREREQUISITE -> Ohm's Law. Attention -> PREREQUISITE -> Transformer).\n"
+            "- PREREQUISITE: For foundational concepts required before learning another concept (Concept A must be understood before Concept B).\n"
             "- DEPENDS_ON: For direct dependencies (e.g., Framework A depends on Technology B).\n"
             "- EXTENDS: For inheritance, specialization, or subclassing (e.g., Subtopic B extends Topic A, or Method B extends Method A).\n"
             "- USES: For utilization/application (e.g., Method A uses Dataset B, or Framework A uses Concept B, or Method A uses Concept B).\n"
@@ -402,8 +402,7 @@ class LLMClient:
                         "- Use ONLY concepts already present in the list.\n"
                         "- Never invent new concepts.\n"
                         "- Return only JSON.\n"
-                        "- If Ohm's Law requires Voltage, Current and Resistance,\n"
-                        "return those relationships even if the PDF never literally says 'prerequisite'.\n"
+                        "- Return relationships when educational dependency is clear even if the PDF never literally says 'prerequisite'.\n"
                         "- Use educational reasoning.\n"
                         "- Ignore RELATED_TO unless it represents a learning dependency."
                     )
@@ -522,6 +521,72 @@ class LLMClient:
             raise ValueError("LLM returned JSON that is not a list.")
         except Exception as e:
             logger.error(f"Error during citations LLM extraction: {e}")
+            raise e
+
+    def extract_hierarchical_graph_from_document(self, sample_text: str, filename: str, main_topic_info: dict) -> dict:
+        """One-call, document-local learning hierarchy for serverless PDF extraction."""
+        if self._is_mock:
+            return self._run_mock_extraction(sample_text)
+
+        system_prompt = (
+            "You are a document-grounded educational knowledge-graph builder.\n"
+            "Build a hierarchical learning graph for ONE uploaded PDF only. Do not use memory from prior documents.\n"
+            "The graph must adapt to the document subject. No fixed templates.\n\n"
+            "Learning hierarchy rules:\n"
+            "- foundation nodes: concepts a student should learn before the main topic.\n"
+            "- core nodes: main concepts directly taught by the PDF.\n"
+            "- advanced nodes: extensions, applications, methods, instruments, edge cases, or next topics.\n"
+            "- Use PREREQUISITE from foundation concept -> concept that depends on it.\n"
+            "- Use CONTAINS from broader topic -> included concept.\n"
+            "- Use EXTENDS from core concept -> advanced concept.\n"
+            "- Use USES, USED_FOR, PART_OF, DEPENDS_ON, CAUSES, RELATED_TO only when clearly meaningful.\n\n"
+            "Grounding rules:\n"
+            "- Prefer concepts explicitly present in the text sample.\n"
+            "- You may add a small number of universally necessary prerequisite concepts if needed for learning, "
+            "but mark them with level='foundation' and explain why they help the document's main topic.\n"
+            "- Never include content from other PDFs, old sessions, or famous examples unless this PDF mentions them.\n"
+            "- Node names must be concise academic/technical terms, max 4 words, max 40 chars.\n"
+            "- Labels must be one of: Topic, Subtopic, Concept, Technology, Framework, Application, Method, Dataset, Keyword.\n"
+            "- level must be one of: foundation, core, advanced.\n\n"
+            "Return ONLY valid JSON, no markdown:\n"
+            "{\n"
+            "  \"nodes\": [\n"
+            "    {\"label\":\"Topic\",\"name\":\"Main Topic\",\"description\":\"...\",\"difficulty_level\":\"Beginner\",\"level\":\"core\"}\n"
+            "  ],\n"
+            "  \"relationships\": [\n"
+            "    {\"from\":\"Prerequisite Concept\",\"to\":\"Dependent Concept\",\"type\":\"PREREQUISITE\"}\n"
+            "  ]\n"
+            "}"
+        )
+        user_prompt = (
+            f"Filename: {filename}\n"
+            f"Detected main topic: {json.dumps(main_topic_info, ensure_ascii=False)}\n\n"
+            f"PDF text sample:\n{sample_text[:9000]}"
+        )
+
+        try:
+            response = self._client.chat.completions.create(
+                model=config.GROQ_MODEL,
+                max_tokens=3500,
+                temperature=0.1,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+            content = response.choices[0].message.content.strip()
+            if content.startswith("```json"):
+                content = content[7:]
+            if content.startswith("```"):
+                content = content[3:]
+            if content.endswith("```"):
+                content = content[:-3]
+            data = json.loads(content.strip())
+            if not isinstance(data, dict) or "nodes" not in data or "relationships" not in data:
+                raise ValueError("hierarchical graph JSON missing nodes or relationships")
+            return data
+        except Exception as e:
+            logger.error(f"Hierarchical document extraction failed: {e}")
             raise e
 
     def _run_mock_extraction(self, text_chunk: str) -> dict:
