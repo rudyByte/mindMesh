@@ -40,9 +40,9 @@ def run_concept_linking_for_highlight(highlight_id: str, text: str, doc_id: str,
     elif "gradient" in text_lower and not any("gradient" in c["name"].lower() for c in concepts):
         new_concept = "Gradient Descent"
 
-    # 2. Real LLM execution
-    is_mock = not config.ANTHROPIC_API_KEY or "mock-api-key" in config.ANTHROPIC_API_KEY
-    if not is_mock and llm_client._client:
+    # 2. Real LLM execution (Groq)
+    use_live = bool(config.GROQ_API_KEY) and "mock-api-key" not in config.GROQ_API_KEY
+    if use_live and llm_client._client:
         try:
             concept_list_str = ", ".join([f"{c['name']} (ID: {c['id']})" for c in concepts])
             prompt = (
@@ -60,13 +60,13 @@ def run_concept_linking_for_highlight(highlight_id: str, text: str, doc_id: str,
                 f"}}\n"
             )
             
-            res = llm_client._client.messages.create(
-                model=config.ANTHROPIC_MODEL,
+            res = llm_client._client.chat.completions.create(
+                model=config.GROQ_MODEL,
                 max_tokens=1000,
                 temperature=0,
                 messages=[{"role": "user", "content": prompt}]
             )
-            content = res.content[0].text.strip()
+            content = res.choices[0].message.content.strip()
             
             # Clean markdown formatting fences
             if content.startswith("```json"): content = content[7:]

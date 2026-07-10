@@ -39,25 +39,25 @@ def get_deep_health():
     except Exception as e:
         supabase_status = {"status": "error", "message": str(e)}
 
-    # 3. Anthropic API Status
+    # 3. LLM (Groq) API Status
     try:
         if llm_client._is_mock:
-            anthropic_status = {"status": "ok", "mode": "mock"}
+            llm_status = {"status": "ok", "mode": "mock"}
         else:
             # Request a single token to verify keys/network connection
-            llm_client._client.messages.create(
-                model=config.ANTHROPIC_MODEL,
+            llm_client._client.chat.completions.create(
+                model=config.GROQ_MODEL,
                 max_tokens=1,
                 messages=[{"role": "user", "content": "ping"}]
             )
-            anthropic_status = {"status": "ok", "mode": "live"}
+            llm_status = {"status": "ok", "mode": "live"}
     except Exception as e:
-        anthropic_status = {"status": "error", "message": str(e)}
+        llm_status = {"status": "error", "message": str(e)}
 
     overall_ok = (
         neo4j_status["status"] == "ok" and 
         supabase_status["status"] == "ok" and 
-        anthropic_status["status"] == "ok"
+        llm_status["status"] == "ok"
     )
 
     return {
@@ -65,6 +65,6 @@ def get_deep_health():
         "services": {
             "neo4j": neo4j_status,
             "supabase": supabase_status,
-            "anthropic": anthropic_status
+            "llm": llm_status
         }
     }
