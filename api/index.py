@@ -1,22 +1,22 @@
 """
 Vercel Python ASGI entry point for MindMesh FastAPI backend.
-
-Environment variables (set in Vercel dashboard):
-  - NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD : Neo4j Aura credentials
-  - GROQ_API_KEY                             : Groq API key
-  - GROQ_MODEL                               : Groq model name (optional)
-  - SUPABASE_URL / SUPABASE_KEY              : Supabase project credentials
-  - MULTI_DOCUMENT_MODE                      : "true" to enable multi-doc mode
 """
-import sys
-import os
 
-# Add project root to sys.path so server/ package is importable
-_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from server.main import app
+app = FastAPI(title="MindMesh API", version="1.0.0")
 
-# Vercel Python runtime detects an ASGI app exported as `handler` or `app`.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/health")
+def get_health():
+    return {"status": "ok"}
+
 handler = app
