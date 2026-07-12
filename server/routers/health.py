@@ -39,18 +39,20 @@ def get_deep_health():
     except Exception as e:
         supabase_status = {"status": "error", "message": str(e)}
 
-    # 3. LLM (Groq) API Status
+    # 3. LLM API Status (Anthropic preferred; Groq fallback). No secrets returned.
     try:
         if llm_client._is_mock:
             llm_status = {"status": "ok", "mode": "mock"}
         else:
-            # Request a single token to verify keys/network connection
-            llm_client._client.chat.completions.create(
-                model=config.GROQ_MODEL,
-                max_tokens=1,
-                messages=[{"role": "user", "content": "ping"}]
+            provider = "anthropic" if (getattr(llm_client, "_anthropic_client", None) or getattr(llm_client, "_anthropic_http", False)) else "groq"
+            content = llm_client._complete_text(
+                "Reply with exactly: ok",
+                "ping",
+                max_tokens=4,
+                temperature=0,
+                prefer_anthropic=True,
             )
-            llm_status = {"status": "ok", "mode": "live"}
+            llm_status = {"status": "ok", "mode": "live", "provider": provider, "sample_ok": bool(content)}
     except Exception as e:
         llm_status = {"status": "error", "message": str(e)}
 
