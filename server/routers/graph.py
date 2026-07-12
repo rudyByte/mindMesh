@@ -2,12 +2,26 @@ from typing import Optional
 import json
 import re
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 from server.utils.neo4j_client import neo4j_client
 from server.utils.llm_client import llm_client
 from server.utils.vercel_blob_client import vercel_blob_client
 
 router = APIRouter()
 _prerequisites_cache = {}
+
+
+class NodeCorrectionRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    session_id: Optional[str] = None
+
+
+class EdgeDeleteRequest(BaseModel):
+    from_id: str
+    to_id: str
+    type: str
+    session_id: Optional[str] = None
 
 def get_primary_label(labels_list) -> str:
     if not labels_list:
@@ -35,6 +49,16 @@ def _load_persisted_session_graph(session_id: Optional[str]):
         return json.loads(raw.decode("utf-8"))
     except Exception:
         return None
+
+
+def _save_persisted_session_graph(session_id: Optional[str], payload: dict) -> None:
+    if not session_id or not vercel_blob_client.is_configured():
+        return
+    vercel_blob_client.put(
+        _json_blob_path("session-graph", session_id),
+        json.dumps(payload).encode("utf-8"),
+        "application/json",
+    )
 
 
 def _hierarchy_from_payload(graph: dict, focus: str, up: int, down: int) -> Optional[dict]:
@@ -95,6 +119,114 @@ def _hierarchy_from_payload(graph: dict, focus: str, up: int, down: int) -> Opti
             seen_related.add(nxt)
             related.append(payload(nxt, 1))
     return {"prerequisites": prerequisites, "target": payload(focus, 0), "extensions": extensions, "applications": applications, "related": related}
+
+
+@router.patch("/graph/node/{node_id}")
+def correct_graph_node(node_id: str, payload: NodeCorrectionRequest):
+    """Manual graph correction: rename and/or update a node description."""
+    new_name = (payload.name or "").strip()
+    new_description = (payload.description or "").strip()
+    if not new_name and not new_description:
+        raise HTTPException(status_code=400, detail="Provide name or description.")
+
+    if neo4j_client.is_mock():
+        node = neo4j_client.mock_nodes.get(node_id)
+        if not node:
+            persisted = _load_persisted_session_graph(payload.session_id)
+            if persisted:
+                changed = False
+                for n in persisted.get("nodes", []):
+                    if n.get("id") == node_id:
+                        if new_name:
+                            n["name"] = new_name
+                            n["title"] = new_name if n.get("label") == "Paper" else n.get("title")
+                        if new_description:
+                            n["description"] = new_description
+                        changed = True
+                        break
+                if changed:
+                    _save_persisted_session_graph(payload.session_id, persisted)
+                    return {"status": "success", "id": node_id}
+            raise HTTPException(status_code=404, detail="Node not found.")
+        if payload.session_id and node.get("session_id") != payload.session_id:
+            raise HTTPException(status_code=403, detail="Node does not belong to this session.")
+        if new_name:
+            node["name"] = new_name
+            if node.get("label") == "Paper":
+                node["title"] = new_name
+        if new_description:
+            node["description"] = new_description
+        return {"status": "success", "id": node_id}
+
+    where_scope = "AND n.session_id = $session_id" if payload.session_id else ""
+    result = neo4j_client.run_query(
+        f"""
+        MATCH (n {{id: $node_id}})
+        WHERE true {where_scope}
+        SET n.name = CASE WHEN $name <> '' THEN $name ELSE n.name END,
+            n.title = CASE WHEN $name <> '' AND n:Paper THEN $name ELSE n.title END,
+            n.description = CASE WHEN $description <> '' THEN $description ELSE n.description END
+        RETURN n.id as id
+        """,
+        {
+            "node_id": node_id,
+            "name": new_name,
+            "description": new_description,
+            "session_id": payload.session_id,
+        },
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Node not found.")
+    return {"status": "success", "id": node_id}
+
+
+@router.delete("/graph/edge")
+def delete_graph_edge(payload: EdgeDeleteRequest):
+    """Manual graph correction: remove one wrong relationship edge."""
+    rel_type = re.sub(r"[^A-Z_]", "", (payload.type or "").upper())
+    if not rel_type:
+        raise HTTPException(status_code=400, detail="Invalid edge type.")
+
+    if neo4j_client.is_mock():
+        before = len(neo4j_client.mock_edges)
+        neo4j_client.mock_edges = [
+            e for e in neo4j_client.mock_edges
+            if not (
+                e.get("from") == payload.from_id
+                and e.get("to") == payload.to_id
+                and e.get("type") == rel_type
+                and (not payload.session_id or e.get("session_id") == payload.session_id)
+            )
+        ]
+        persisted = _load_persisted_session_graph(payload.session_id)
+        if persisted:
+            persisted["edges"] = [
+                e for e in persisted.get("edges", [])
+                if not (
+                    (e.get("from") or e.get("source")) == payload.from_id
+                    and (e.get("to") or e.get("target")) == payload.to_id
+                    and e.get("type") == rel_type
+                )
+            ]
+            _save_persisted_session_graph(payload.session_id, persisted)
+        return {"status": "success", "deleted": before - len(neo4j_client.mock_edges)}
+
+    scope = "AND r.session_id = $session_id" if payload.session_id else ""
+    result = neo4j_client.run_query(
+        f"""
+        MATCH (a {{id: $from_id}})-[r:{rel_type}]->(b {{id: $to_id}})
+        WHERE true {scope}
+        WITH collect(r) as rels
+        FOREACH (rel IN rels | DELETE rel)
+        RETURN size(rels) as deleted
+        """,
+        {
+            "from_id": payload.from_id,
+            "to_id": payload.to_id,
+            "session_id": payload.session_id,
+        },
+    )
+    return {"status": "success", "deleted": result[0].get("deleted", 0) if result else 0}
 
 def _mock_node_payload(node_id: str, distance: int = 0) -> dict:
     n = neo4j_client.mock_nodes.get(node_id) or {}
