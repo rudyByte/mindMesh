@@ -1,7 +1,10 @@
 from typing import Optional
+import json
+import re
 from fastapi import APIRouter, HTTPException, Query
 from server.utils.neo4j_client import neo4j_client
 from server.utils.llm_client import llm_client
+from server.utils.vercel_blob_client import vercel_blob_client
 
 router = APIRouter()
 _prerequisites_cache = {}
@@ -16,6 +19,82 @@ def get_primary_label(labels_list) -> str:
             return lbl
     return "Concept"
 
+
+
+
+def _json_blob_path(kind: str, key: str) -> str:
+    safe_key = re.sub(r"[^a-zA-Z0-9_.-]", "_", key)
+    return f"state/{kind}/{safe_key}.json"
+
+
+def _load_persisted_session_graph(session_id: Optional[str]):
+    if not session_id or not vercel_blob_client.is_configured():
+        return None
+    try:
+        raw = vercel_blob_client.get(_json_blob_path("session-graph", session_id))
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _hierarchy_from_payload(graph: dict, focus: str, up: int, down: int) -> Optional[dict]:
+    nodes = {n.get("id"): n for n in graph.get("nodes", []) if n.get("id")}
+    if focus not in nodes:
+        return None
+
+    def payload(node_id: str, distance: int = 0) -> dict:
+        n = nodes.get(node_id) or {}
+        return {
+            "id": node_id,
+            "label": n.get("label", "Concept"),
+            "name": n.get("name") or n.get("title") or "Unknown",
+            "description": n.get("description", ""),
+            "difficulty_level": n.get("difficulty_level", "Beginner"),
+            "level": n.get("level"),
+            "distance": distance,
+        }
+
+    edges = graph.get("edges", []) or []
+    def walk(reverse: bool, types: set[str], max_depth: int) -> list[dict]:
+        results = []
+        seen = {focus}
+        frontier = [(focus, 0)]
+        while frontier:
+            current, depth = frontier.pop(0)
+            if depth >= max_depth:
+                continue
+            for edge in edges:
+                if edge.get("type") not in types:
+                    continue
+                src, dst = edge.get("from") or edge.get("source"), edge.get("to") or edge.get("target")
+                if isinstance(src, dict): src = src.get("id")
+                if isinstance(dst, dict): dst = dst.get("id")
+                match = dst == current if reverse else src == current
+                nxt = src if reverse else dst
+                if not match or not nxt or nxt in seen or nxt not in nodes:
+                    continue
+                seen.add(nxt)
+                distance = depth + 1
+                results.append(payload(nxt, distance))
+                frontier.append((nxt, distance))
+        return sorted(results, key=lambda item: (-item["distance"], item["name"])) if reverse else sorted(results, key=lambda item: (item["distance"], item["name"]))
+
+    prerequisites = walk(True, {"PREREQUISITE_OF", "PREREQUISITE", "DEPENDS_ON"}, up)
+    extensions = walk(False, {"EXTENDS", "PART_OF"}, down)
+    applications = walk(False, {"USED_FOR", "USES", "EVALUATED_ON"}, down)
+    related = []
+    seen_related = {n["id"] for n in prerequisites + extensions + applications} | {focus}
+    for edge in edges:
+        if edge.get("type") != "RELATED_TO":
+            continue
+        src, dst = edge.get("from") or edge.get("source"), edge.get("to") or edge.get("target")
+        if isinstance(src, dict): src = src.get("id")
+        if isinstance(dst, dict): dst = dst.get("id")
+        nxt = dst if src == focus else (src if dst == focus else None)
+        if nxt and nxt in nodes and nxt not in seen_related:
+            seen_related.add(nxt)
+            related.append(payload(nxt, 1))
+    return {"prerequisites": prerequisites, "target": payload(focus, 0), "extensions": extensions, "applications": applications, "related": related}
 
 def _mock_node_payload(node_id: str, distance: int = 0) -> dict:
     n = neo4j_client.mock_nodes.get(node_id) or {}
@@ -42,6 +121,10 @@ def get_focused_hierarchy(
     if neo4j_client.is_mock():
         target = neo4j_client.mock_nodes.get(focus)
         if not target:
+            persisted = _load_persisted_session_graph(session_id)
+            persisted_hierarchy = _hierarchy_from_payload(persisted or {}, focus, up, down)
+            if persisted_hierarchy:
+                return persisted_hierarchy
             raise HTTPException(status_code=404, detail="Target node not found.")
         if session_id and target.get("session_id") != session_id:
             raise HTTPException(status_code=403, detail="Access denied.")
