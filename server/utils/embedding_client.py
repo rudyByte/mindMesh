@@ -2,10 +2,10 @@ import hashlib
 import logging
 import math
 import re
+import json
+import urllib.request
 from functools import lru_cache
 from typing import Iterable
-
-from openai import OpenAI
 
 from server.config import config
 
@@ -46,11 +46,8 @@ class EmbeddingClient:
             and config.OPENAI_API_KEY
             and "mock" not in config.OPENAI_API_KEY.lower()
         ):
-            try:
-                self._client = OpenAI(api_key=config.OPENAI_API_KEY)
-                logger.info("Embedding client using OpenAI embeddings.")
-            except Exception as e:
-                logger.warning(f"Failed to initialize OpenAI embeddings: {e}. Falling back to local vectors.")
+            self._client = True
+            logger.info("Embedding client using OpenAI-compatible HTTP embeddings.")
 
     def is_remote(self) -> bool:
         return self._client is not None
@@ -89,11 +86,19 @@ class EmbeddingClient:
             return tuple()
         if self._client:
             try:
-                response = self._client.embeddings.create(
-                    model=config.EMBEDDING_MODEL,
-                    input=clean,
+                payload = json.dumps({"model": config.EMBEDDING_MODEL, "input": clean}).encode("utf-8")
+                req = urllib.request.Request(
+                    "https://api.openai.com/v1/embeddings",
+                    data=payload,
+                    headers={
+                        "Authorization": f"Bearer {config.OPENAI_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
                 )
-                return tuple(float(x) for x in response.data[0].embedding)
+                with urllib.request.urlopen(req, timeout=20) as res:
+                    data = json.loads(res.read().decode("utf-8"))
+                return tuple(float(x) for x in data["data"][0]["embedding"])
             except Exception as e:
                 logger.warning(f"Remote embedding failed, using local vector fallback: {e}")
         return tuple(self._local_embedding(clean))

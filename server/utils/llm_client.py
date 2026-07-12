@@ -1,7 +1,8 @@
 import json
 import logging
 import re
-from openai import OpenAI
+import urllib.request
+from types import SimpleNamespace
 from server.config import config
 
 try:
@@ -10,6 +11,38 @@ except Exception:  # pragma: no cover - optional provider
     Anthropic = None
 
 logger = logging.getLogger("llm_client")
+
+
+class _OpenAICompatClient:
+    """Tiny OpenAI-compatible chat client for Groq/OpenAI-style endpoints."""
+    def __init__(self, api_key: str, base_url: str, timeout: float = 30):
+        self.api_key = api_key
+        self.base_url = (base_url or "https://api.groq.com/openai/v1").rstrip("/")
+        self.timeout = timeout
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._chat_create))
+
+    def _chat_create(self, model: str, messages: list[dict], max_tokens: int, temperature: float = 0, **_: dict):
+        payload = json.dumps({
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/chat/completions",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as res:
+            data = json.loads(res.read().decode("utf-8"))
+        content = data["choices"][0]["message"]["content"]
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        )
 
 def normalize_and_clean_concept_name(name: str) -> str:
     # Strip spaces and formatting
@@ -296,7 +329,7 @@ class LLMClient:
 
         if config.GROQ_API_KEY and "mock-api-key" not in config.GROQ_API_KEY:
             try:
-                self._client = OpenAI(
+                self._client = _OpenAICompatClient(
                     api_key=config.GROQ_API_KEY,
                     base_url=config.GROQ_BASE_URL,
                     timeout=config.LLM_TIMEOUT_SECONDS,
@@ -1332,7 +1365,7 @@ class LLMClient:
         )
         try:
             # Bypass mock mode check to force real LLM generation
-            client = self._client if self._client else OpenAI(api_key=config.GROQ_API_KEY, base_url=config.GROQ_BASE_URL)
+            client = self._client if self._client else _OpenAICompatClient(api_key=config.GROQ_API_KEY, base_url=config.GROQ_BASE_URL, timeout=config.LLM_TIMEOUT_SECONDS)
             response = client.chat.completions.create(
                 model=config.GROQ_MODEL,
                 max_tokens=800,
