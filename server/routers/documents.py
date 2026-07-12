@@ -793,18 +793,11 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         # 3. For each chunk, extract nodes/relationships using LLM client
         all_nodes = []
         all_relationships = []
-        use_serverless_local_extraction = bool(
-            os.getenv("VERCEL") and getattr(config, "SERVERLESS_LOCAL_EXTRACTION", True)
-        )
-        allow_serverless_llm_for_small_doc = bool(
-            use_serverless_local_extraction
-            and total_chunks <= 2
-            and len(text) <= 12000
-            and not getattr(llm_client, "_is_mock", False)
-        )
+        llm_unavailable = bool(getattr(llm_client, "_is_mock", False))
+        use_serverless_local_extraction = llm_unavailable
 
         def extract_one_chunk(chunk_index: int, chunk_text: str) -> tuple[list, list, bool, bool]:
-            if use_serverless_local_extraction and not allow_serverless_llm_for_small_doc:
+            if use_serverless_local_extraction:
                 result = _build_dynamic_fallback_graph(
                     chunk_text,
                     f"{filename} chunk {chunk_index + 1}",
@@ -820,7 +813,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 return extracted_nodes, extracted_rels, False, True
 
             try:
-                result = llm_client.extract_graph_from_chunk(chunk_text, include_prerequisites=False)
+                result = llm_client.extract_graph_from_chunk(chunk_text, include_prerequisites=True)
                 chunk_failed = False
                 fallback_used = False
             except Exception as first_error:
@@ -842,7 +835,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                         rel["to"] = normalize_and_clean_concept_name(rel.get("to", ""))
                     return extracted_nodes, extracted_rels, chunk_failed, fallback_used
                 try:
-                    result = llm_client.extract_graph_from_chunk(chunk_text, include_prerequisites=False)
+                    result = llm_client.extract_graph_from_chunk(chunk_text, include_prerequisites=True)
                     chunk_failed = False
                     fallback_used = False
                 except Exception as retry_error:
@@ -1273,7 +1266,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         # Generate Prerequisite Relationships via second LLM pass
         logger.info("Running second LLM pass for prerequisite generation...")
         concept_names = [n["name"] for n in canonical_nodes if n.get("label") not in ["Document", "Paper", "Citation", "Note", "Highlight"]]
-        use_local_serverless = bool(os.getenv("VERCEL") and getattr(config, "SERVERLESS_LOCAL_EXTRACTION", True))
+        use_local_serverless = bool(getattr(llm_client, "_is_mock", False))
         prereqs = [] if (use_local_serverless or getattr(llm_client, "_is_mock", False)) else llm_client.extract_document_prerequisites(concept_names)
         if prereqs:
             logger.info(f"Generated {len(prereqs)} PREREQUISITE relationships.")
