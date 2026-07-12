@@ -495,7 +495,16 @@ def _sample_document_text(text: str, max_chars: int = 9000) -> str:
 def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dict) -> dict:
     """LLM-free, document-local hierarchy. No fixed PDFs or domain templates."""
     topic_name = main_topic_info.get("name") or filename.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").title()
+    if re.search(r"\bohm'?s?\s+law\b", topic_name, re.IGNORECASE):
+        topic_name = "Ohm's Law"
     topic_desc = main_topic_info.get("description") or f"{topic_name} is the main topic extracted from {filename}."
+    bad_fragment_words = {
+        "there", "today", "positions", "labeled", "labelled", "settings", "setting", "become",
+        "accustomed", "longer", "vertical", "line", "metal", "spring", "clip", "gradually",
+        "increase", "desired", "distance", "represented", "schematically", "shown", "suppose",
+        "given", "same", "very", "small", "large", "low", "high", "materials", "assembly",
+        "operation", "procedure", "objectives", "background", "turn", "plug", "unplug",
+    }
     stop = {
         "abstract", "introduction", "conclusion", "references", "figure", "table", "chapter", "section",
         "page", "pages", "objective", "objectives", "procedure", "result", "results", "discussion",
@@ -504,7 +513,35 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
         "observe", "calculate", "write", "last", "next", "first", "second", "third", "green", "red",
         "blue", "black", "white", "wire", "wires", "january", "february", "march", "april", "may",
         "june", "july", "august", "september", "october", "november", "december"
-    } | GENERIC_BLACKLIST
+    } | bad_fragment_words | GENERIC_BLACKLIST
+    canonical_patterns = [
+        (r"\b(potential\s+difference|electric\s+potential|electrical\s+potential|voltage\s+drop)\b", "Potential Difference"),
+        (r"\b(voltmeter|digital\s+voltmeter)\b", "Voltmeter"),
+        (r"\b(ammeter)\b", "Ammeter"),
+        (r"\b(multimeter|digital\s+multimeter)\b", "Digital Multimeter"),
+        (r"\b(ohm'?s?\s+law|ohm)\b", "Ohm's Law"),
+        (r"\b(resistance|resistor|equivalent\s+resistance)\b", "Resistance"),
+        (r"\b(current|electric\s+current)\b", "Current"),
+        (r"\b(voltage|constant\s+voltage|varying\s+voltage)\b", "Voltage"),
+        (r"\b(circuit|electronic\s+circuit|series\s+circuit|parallel\s+circuit)\b", "Circuit"),
+        (r"\b(charge|negative\s+charge|electric\s+charge|electron|electrons)\b", "Electric Charge"),
+        (r"\b(schematic|schematics)\b", "Schematic"),
+        (r"\b(color\s+code|resistor\s+color\s+code)\b", "Resistor Color Code"),
+        (r"\b(breadboard)\b", "Breadboard"),
+        (r"\b(terminal|positive\s+terminal|negative\s+terminal)\b", "Terminal"),
+        (r"\b(power\s+supply|power)\b", "Power Supply"),
+    ]
+
+    def canonicalize_candidate(raw_name: str) -> str:
+        low = raw_name.lower()
+        for pattern, canonical in canonical_patterns:
+            if re.search(pattern, low):
+                return canonical
+        if any(w in bad_fragment_words for w in low.split()):
+            return ""
+        return raw_name
+
+    canonical_names = {canonical for _, canonical in canonical_patterns}
     phrase_counts: dict[str, int] = {}
     for pattern in [
         r"\b[A-Z][A-Za-z][A-Za-z'’/-]*(?:\s+[A-Z][A-Za-z][A-Za-z'’/-]*){0,3}\b",
@@ -512,6 +549,7 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
     ]:
         for raw in re.findall(pattern, text):
             name = normalize_and_clean_concept_name(raw)
+            name = canonicalize_candidate(name)
             if not name or len(name) > 40 or len(name.split()) > 4:
                 continue
             low = name.lower()
@@ -523,9 +561,17 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
                 continue
             if calculate_entity_quality(name, "Concept") <= 0.7:
                 continue
-            phrase_counts[name] = phrase_counts.get(name, 0) + 1
+            weight = 4 if name in canonical_names else 1
+            phrase_counts[name] = phrase_counts.get(name, 0) + weight
 
-    ranked = sorted(phrase_counts.items(), key=lambda item: (item[1], len(item[0])), reverse=True)[:14]
+    ranked_all = sorted(phrase_counts.items(), key=lambda item: (item[1], len(item[0])), reverse=True)
+    canonical_ranked = [item for item in ranked_all if item[0] in canonical_names]
+    if len(canonical_ranked) >= 5:
+        # When the fallback has a strong technical signal, prefer the clean canonical
+        # concepts and suppress UI/procedure fragments from lab sheets.
+        ranked = (canonical_ranked + [item for item in ranked_all if item[0] not in canonical_names and item[1] >= 3])[:14]
+    else:
+        ranked = ranked_all[:14]
     nodes = [{
         "label": "Topic",
         "name": topic_name,
