@@ -4,7 +4,7 @@ neo4j==5.21.0
 pypdf==4.2.0
 PyMuPDF==1.26.6
 pillow==12.0.0
-rapidocr
+rapidocr-onnxruntime
 openai
 anthropic
 python-dotenv==1.0.1
