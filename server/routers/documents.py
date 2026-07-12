@@ -1272,6 +1272,16 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             if rel["from"].lower().strip() in kept_names and rel["to"].lower().strip() in kept_names
         ]
 
+        if total_chunks and fallback_chunks == total_chunks:
+            main_topic_key = _concept_identity_key(main_topic_info.get("name") or filename.rsplit(".", 1)[0])
+            merged_relationships = [
+                rel for rel in merged_relationships
+                if not (
+                    rel.get("type") == "PREREQUISITE_OF"
+                    and _concept_identity_key(rel.get("from", "")) == main_topic_key
+                )
+            ]
+
         # Ensure graph connectivity (connect isolated nodes/subgraphs to the central node)
         nodes_by_name = {n["name"].lower().strip(): n for n in canonical_nodes}
         
