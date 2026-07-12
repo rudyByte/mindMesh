@@ -756,7 +756,6 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
 
         # Persistent multi-document mode: never wipe existing graph content on upload.
         # New concepts/papers/authors are merged into the active session/user graph below.
-        from server.config import config
         multi_doc_mode = True
 
         # 4. Idempotent Merge Writes to Neo4j
@@ -1233,7 +1232,6 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             node_id = str(uuid.uuid4())
             
             # Check multi-document mode config
-            from server.config import config
             multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False) or (session_id is not None)
 
             # Neo4j query
@@ -1954,7 +1952,6 @@ def get_document_graph(id: str, session_id: Optional[str] = Query(None)):
             if res and res[0].get("session_id") != session_id:
                 raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
 
-    from server.config import config
     multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False)
 
     if neo4j_client.is_mock():
