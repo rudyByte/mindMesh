@@ -768,6 +768,76 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
     return {"nodes": nodes, "relationships": rels}
 
 
+def _add_document_cooccurrence_edges(
+    text: str,
+    nodes: list[dict],
+    relationships: list[dict],
+    max_extra_edges: int = 55,
+) -> list[dict]:
+    """Add document-local cross-links so fallback graphs become networks, not chains."""
+    kept = [
+        n.get("name", "")
+        for n in nodes
+        if n.get("name") and n.get("label") not in ["Paper", "Document", "Citation", "Note", "Highlight", "Author"]
+    ]
+    if len(kept) < 3:
+        return relationships
+
+    existing = {
+        (_concept_identity_key(r.get("from", "")), _concept_identity_key(r.get("to", "")), r.get("type", "RELATED_TO"))
+        for r in relationships
+    }
+    pair_scores: dict[tuple[str, str], int] = {}
+    clean_text = re.sub(r"\s+", " ", text)
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", clean_text) if len(s.split()) >= 5]
+
+    for sentence in sentences:
+        low = sentence.lower()
+        present: list[str] = []
+        for name in kept:
+            name_low = name.lower()
+            if re.search(rf"\b{re.escape(name_low)}\b", low):
+                present.append(name)
+        if len(present) < 2:
+            continue
+        present = present[:7]
+        for i, left in enumerate(present):
+            for right in present[i + 1:]:
+                a, b = sorted([left, right], key=lambda x: _concept_identity_key(x))
+                key = (_concept_identity_key(a), _concept_identity_key(b))
+                pair_scores[key] = pair_scores.get(key, 0) + 1
+
+    # Add semantic-token similarity links too, so short educational PDFs still form clusters.
+    for i, left in enumerate(kept):
+        left_tokens = set(re.findall(r"[a-z]+", left.lower())) - {"law", "concept"}
+        for right in kept[i + 1:]:
+            right_tokens = set(re.findall(r"[a-z]+", right.lower())) - {"law", "concept"}
+            shared = left_tokens & right_tokens
+            if shared:
+                a, b = sorted([left, right], key=lambda x: _concept_identity_key(x))
+                key = (_concept_identity_key(a), _concept_identity_key(b))
+                pair_scores[key] = pair_scores.get(key, 0) + 2
+
+    added = 0
+    by_identity = {_concept_identity_key(name): name for name in kept}
+    for (left_key, right_key), score in sorted(pair_scores.items(), key=lambda item: item[1], reverse=True):
+        if added >= max_extra_edges:
+            break
+        left = by_identity.get(left_key)
+        right = by_identity.get(right_key)
+        if not left or not right or left == right:
+            continue
+        rel_key = (_concept_identity_key(left), _concept_identity_key(right), "RELATED_TO")
+        rel_key_reverse = (_concept_identity_key(right), _concept_identity_key(left), "RELATED_TO")
+        if rel_key in existing or rel_key_reverse in existing:
+            continue
+        existing.add(rel_key)
+        relationships.append({"from": left, "to": right, "type": "RELATED_TO"})
+        added += 1
+
+    return relationships
+
+
 def _infer_learning_prerequisite_edges(nodes: list[dict]) -> list[dict]:
     """Infer prerequisite edges from concepts already extracted from this document/session."""
     node_names = [
@@ -1281,6 +1351,12 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                     and _concept_identity_key(rel.get("from", "")) == main_topic_key
                 )
             ]
+            merged_relationships = _add_document_cooccurrence_edges(
+                text=text,
+                nodes=canonical_nodes,
+                relationships=merged_relationships,
+                max_extra_edges=55,
+            )
 
         # Ensure graph connectivity (connect isolated nodes/subgraphs to the central node)
         nodes_by_name = {n["name"].lower().strip(): n for n in canonical_nodes}
