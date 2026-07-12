@@ -559,6 +559,7 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
     stop = {
         "abstract", "introduction", "conclusion", "references", "figure", "table", "chapter", "section",
         "page", "pages", "objective", "objectives", "procedure", "result", "results", "discussion",
+        "learning", "learning document",
         "example", "examples", "question", "questions", "answer", "answers", "exercise", "exercises",
         "using", "use", "used", "attach", "attached", "connect", "connected", "disconnect", "record",
         "observe", "calculate", "write", "last", "next", "first", "second", "third", "green", "red",

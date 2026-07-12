@@ -153,6 +153,7 @@ GENERIC_BLACKLIST = {
     "unsolved", "solved", "exercise", "exercises", "question", "questions", "answer", "answers",
     "publisher", "publishing", "edition", "isbn", "copyright", "all rights reserved", "printed in", "library of congress",
     "web", "email", "mail", "unknown", "null", "none", "undefined", "n/a", "na",
+    "learning", "learning document",
     "chapter 1", "chapter 2", "chapter 3", "chapter 4", "chapter 5", "chapter 6",
     "section 1", "section 2", "section 3", "section 4", "section 5", "section 6",
     "table 1", "table 2", "table 3", "figure 1", "figure 2", "figure 3",
