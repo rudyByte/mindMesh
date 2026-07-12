@@ -1,4 +1,5 @@
 import io
+import os
 import uuid
 import datetime
 import logging
@@ -616,8 +617,26 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         # 3. For each chunk, extract nodes/relationships using LLM client
         all_nodes = []
         all_relationships = []
+        use_serverless_local_extraction = bool(
+            os.getenv("VERCEL") and getattr(config, "SERVERLESS_LOCAL_EXTRACTION", True)
+        )
 
         def extract_one_chunk(chunk_index: int, chunk_text: str) -> tuple[list, list, bool]:
+            if use_serverless_local_extraction:
+                result = _build_dynamic_fallback_graph(
+                    chunk_text,
+                    f"{filename} chunk {chunk_index + 1}",
+                    main_topic_info,
+                )
+                extracted_nodes = result.get("nodes", [])
+                extracted_rels = result.get("relationships", [])
+                for node in extracted_nodes:
+                    node["name"] = normalize_and_clean_concept_name(node.get("name", ""))
+                for rel in extracted_rels:
+                    rel["from"] = normalize_and_clean_concept_name(rel.get("from", ""))
+                    rel["to"] = normalize_and_clean_concept_name(rel.get("to", ""))
+                return extracted_nodes, extracted_rels, False
+
             try:
                 result = llm_client.extract_graph_from_chunk(chunk_text, include_prerequisites=False)
                 chunk_failed = False
