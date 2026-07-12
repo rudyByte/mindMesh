@@ -106,6 +106,7 @@ def _save_doc_status(
     fallback_chunks: Optional[int] = None,
     ocr_used: Optional[bool] = None,
     ocr_confidence: Optional[float] = None,
+    ocr_error: Optional[str] = None,
 ) -> None:
     previous = extraction_status_cache.get(doc_id) or _load_json_state("doc-status", doc_id) or {}
     payload = {
@@ -120,6 +121,7 @@ def _save_doc_status(
         "fallback_chunks": fallback_chunks if fallback_chunks is not None else previous.get("fallback_chunks", 0),
         "ocr_used": ocr_used if ocr_used is not None else previous.get("ocr_used", False),
         "ocr_confidence": ocr_confidence if ocr_confidence is not None else previous.get("ocr_confidence"),
+        "ocr_error": ocr_error if ocr_error is not None else previous.get("ocr_error"),
     }
     extraction_status_cache[doc_id] = {
         "status": payload["status"],
@@ -131,6 +133,7 @@ def _save_doc_status(
         "fallback_chunks": payload["fallback_chunks"],
         "ocr_used": payload["ocr_used"],
         "ocr_confidence": payload["ocr_confidence"],
+        "ocr_error": payload["ocr_error"],
     }
     _save_json_state("doc-status", doc_id, payload)
 
@@ -240,6 +243,7 @@ class StatusResponse(BaseModel):
     fallback_chunks: int = 0
     ocr_used: bool = False
     ocr_confidence: float | None = None
+    ocr_error: str | None = None
 
 def is_acronym_of(a: str, p: str) -> bool:
     a_clean = re.sub(r'[^a-zA-Z]', '', a).upper()
@@ -903,7 +907,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
     failed_chunks = 0
     fallback_chunks = 0
     total_chunks = 0
-    text_meta = {"ocr_used": False, "ocr_confidence": None}
+    text_meta = {"ocr_used": False, "ocr_confidence": None, "ocr_error": None}
     _save_doc_status(doc_id, "processing", 10, None, session_id)
     
     try:
@@ -924,6 +928,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             session_id,
             ocr_used=bool(text_meta.get("ocr_used")),
             ocr_confidence=text_meta.get("ocr_confidence"),
+            ocr_error=text_meta.get("ocr_error"),
         )
         
         # Identify main topic of the document
@@ -956,6 +961,9 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             total_chunks=total_chunks,
             extraction_mode="full_document_chunked",
             fallback_chunks=0,
+            ocr_used=bool(text_meta.get("ocr_used")),
+            ocr_confidence=text_meta.get("ocr_confidence"),
+            ocr_error=text_meta.get("ocr_error"),
         )
         
         # 3. For each chunk, extract nodes/relationships using LLM client
@@ -1842,6 +1850,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             fallback_chunks=fallback_chunks,
             ocr_used=bool(text_meta.get("ocr_used")),
             ocr_confidence=text_meta.get("ocr_confidence"),
+            ocr_error=text_meta.get("ocr_error"),
         )
         _save_session_doc(session_id, {
             "id": doc_id,
@@ -1861,7 +1870,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 d.extraction_mode = $extraction_mode,
                 d.fallback_chunks = $fallback_chunks,
                 d.ocr_used = $ocr_used,
-                d.ocr_confidence = $ocr_confidence
+                d.ocr_confidence = $ocr_confidence,
+                d.ocr_error = $ocr_error
             """,
             {
                 "doc_id": doc_id,
@@ -1871,6 +1881,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 "fallback_chunks": fallback_chunks,
                 "ocr_used": bool(text_meta.get("ocr_used")),
                 "ocr_confidence": text_meta.get("ocr_confidence"),
+                "ocr_error": text_meta.get("ocr_error"),
             }
         )
         logger.info(f"Extraction pipeline completed successfully for document {doc_id}.")
@@ -1891,6 +1902,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             fallback_chunks=fallback_chunks,
             ocr_used=bool(text_meta.get("ocr_used")),
             ocr_confidence=text_meta.get("ocr_confidence"),
+            ocr_error=text_meta.get("ocr_error"),
         )
         _save_session_doc(session_id, {
             "id": doc_id,
@@ -2326,6 +2338,7 @@ def get_document_status(id: str, session_id: Optional[str] = Query(None)):
             fallback_chunks=persisted_status.get("fallback_chunks") or 0,
             ocr_used=bool(persisted_status.get("ocr_used")),
             ocr_confidence=persisted_status.get("ocr_confidence"),
+            ocr_error=persisted_status.get("ocr_error"),
         )
         
     # Check database next
@@ -2339,7 +2352,8 @@ def get_document_status(id: str, session_id: Optional[str] = Query(None)):
            d.extraction_mode as extraction_mode,
            d.fallback_chunks as fallback_chunks,
            d.ocr_used as ocr_used,
-           d.ocr_confidence as ocr_confidence
+           d.ocr_confidence as ocr_confidence,
+           d.ocr_error as ocr_error
     """
     res = neo4j_client.run_query(query, {"id": id})
     if res:
@@ -2354,6 +2368,7 @@ def get_document_status(id: str, session_id: Optional[str] = Query(None)):
             fallback_chunks=record.get("fallback_chunks") or 0,
             ocr_used=bool(record.get("ocr_used")),
             ocr_confidence=record.get("ocr_confidence"),
+            ocr_error=record.get("ocr_error"),
         )
         
     raise HTTPException(status_code=404, detail="Document not found.")

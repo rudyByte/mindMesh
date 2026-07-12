@@ -78,6 +78,10 @@ def _ocr_pdf_pages(file_bytes: bytes) -> tuple[list[str], float | None]:
         try:
             import pytesseract
             from pytesseract import Output
+            tesseract_cmd = os.getenv("OCR_TESSERACT_CMD")
+            if tesseract_cmd:
+                pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+            pytesseract.get_tesseract_version()
             tesseract = pytesseract
             tesseract_output = Output
         except Exception as e:
