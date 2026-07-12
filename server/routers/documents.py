@@ -4,6 +4,7 @@ import uuid
 import datetime
 import logging
 import json
+from collections import Counter
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException, Query
@@ -555,6 +556,11 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
         "regulate", "regulates", "compare", "compares", "explain", "explains",
         "occur", "occurs", "leaf", "leaves", "leave", "that", "measure", "measures",
         "connect", "connected", "parallel", "across", "depend", "depends", "include", "includes",
+        "wire", "wires", "red", "green", "black", "white", "purple", "lead", "leads",
+        "panel", "lower", "upper", "digit", "digits", "color", "colour", "band", "bands",
+        "just", "stuck", "fashion", "board", "relation", "because", "called", "case", "below",
+        "only", "much", "form", "held", "constant", "end", "free", "positive", "negative",
+        "determine", "determines", "opposes", "oppose", "charged", "particle", "particles",
     }
     stop = {
         "abstract", "introduction", "conclusion", "references", "figure", "table", "chapter", "section",
@@ -568,7 +574,20 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
     } | bad_fragment_words | GENERIC_BLACKLIST
     def canonicalize_candidate(raw_name: str) -> str:
         low = raw_name.lower()
+        raw_name = re.split(
+            r"\b(?:between|across|through|with|without|from|into|inside|within|during|when|where|that|which)\b",
+            raw_name,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip()
+        low = raw_name.lower()
         if any(w in bad_fragment_words for w in low.split()):
+            return ""
+        if re.match(r"^(first|second|third|fourth|fifth|last|next)\b", low):
+            return ""
+        if re.match(r"^(determine|calculate|measure|record|observe|oppose|opposes|connect|attach)\b", low):
+            return ""
+        if re.search(r"\b(?:wire|lead|panel|digit|band|setting|plug|input|terminal)\b", low):
             return ""
         return raw_name
 
@@ -577,6 +596,7 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
     def add_candidate(raw: str, weight: int = 1):
         name = normalize_and_clean_concept_name(raw)
         name = canonicalize_candidate(name)
+        name = normalize_and_clean_concept_name(name) if name else ""
         if not name or len(name) > 40 or len(name.split()) > 4:
             return
         if _concept_identity_key(name) == _concept_identity_key(topic_name):
@@ -627,8 +647,43 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
             add_candidate(trim_relation_phrase(left), 4)
             add_candidate(trim_relation_phrase(right), 4)
 
-    ranked_all = sorted(phrase_counts.items(), key=lambda item: (item[1], len(item[0])), reverse=True)
-    ranked = ranked_all[:14]
+    salient_single_terms = {
+        "voltage", "current", "resistance", "circuit", "electron", "electrons", "charge", "charges",
+        "potential", "difference", "resistor", "resistors", "conductor", "conductors",
+        "insulator", "insulators", "voltmeter", "ammeter", "multimeter", "ohmmeter",
+        "tolerance", "power", "supply", "energy", "field", "force", "equation",
+    }
+    token_counts = Counter(t.lower() for t in re.findall(r"\b[A-Za-z][A-Za-z-]{3,}\b", text))
+    for term, count in token_counts.items():
+        if term in salient_single_terms:
+            add_candidate(term, 6 + count)
+
+    def learning_value(name: str, count: int) -> float:
+        low = name.lower()
+        value = count * 10
+        if len(name.split()) > 1:
+            value += 8
+        if any(k in low for k in [
+            "law", "equation", "relationship", "potential", "voltage", "current", "resistance",
+            "charge", "electron", "circuit", "resistor", "voltmeter", "ammeter", "multimeter",
+            "power supply", "direct current", "alternating current", "conductors", "insulators",
+        ]):
+            value += 18
+        if low in {"just", "relation", "fashion", "board", "stuck"}:
+            value -= 100
+        return value
+
+    ranked_all = sorted(phrase_counts.items(), key=lambda item: (learning_value(item[0], item[1]), item[1], len(item[0])), reverse=True)
+    ranked = []
+    ranked_seen = set()
+    for name, score in ranked_all:
+        key = _concept_identity_key(name)
+        if key in ranked_seen:
+            continue
+        ranked_seen.add(key)
+        ranked.append((name, score))
+        if len(ranked) >= 10:
+            break
     nodes = [{
         "label": "Topic",
         "name": topic_name,
@@ -647,14 +702,6 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
 
     rels = []
     seen = set()
-    for node in nodes[1:]:
-        rel = "CONTAINS"
-        source, target = topic_name, node["name"]
-        key = (source, target, rel)
-        if key not in seen:
-            seen.add(key)
-            rels.append({"from": source, "to": target, "type": rel})
-
     by_key = {_concept_identity_key(n["name"]): n["name"] for n in nodes}
 
     def find_node_phrase(raw: str) -> str:
@@ -701,6 +748,23 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
                 seen.add(key)
                 rels.append({"from": source, "to": target, "type": "CONTAINS"})
 
+    inferred = _infer_learning_prerequisite_edges(nodes)
+    for rel in inferred:
+        key = (rel.get("from"), rel.get("to"), rel.get("type"))
+        if key not in seen:
+            seen.add(key)
+            rels.append(rel)
+
+    for node in nodes[1:]:
+        rel = "CONTAINS"
+        source, target = topic_name, node["name"]
+        if any(r.get("to") == target and r.get("type") == "PREREQUISITE_OF" for r in rels):
+            continue
+        key = (source, target, rel)
+        if key not in seen:
+            seen.add(key)
+            rels.append({"from": source, "to": target, "type": rel})
+
     return {"nodes": nodes, "relationships": rels}
 
 
@@ -711,22 +775,56 @@ def _infer_learning_prerequisite_edges(nodes: list[dict]) -> list[dict]:
         for n in nodes
         if n.get("name") and n.get("label") not in ["Paper", "Document", "Citation", "Note", "Highlight", "Author"]
     ]
-    lowered = {_concept_identity_key(name): name for name in node_names}
-
-    def find_any(keys: list[str], exclude: str | None = None) -> list[str]:
-        matches = []
-        exclude_key = _concept_identity_key(exclude or "")
-        for low, original in lowered.items():
-            if exclude and original == exclude:
-                continue
-            if exclude_key and low == exclude_key:
-                continue
-            if low in keys:
-                matches.append(original)
-        return matches
-
     inferred = []
     seen = set()
+
+    def rank(name: str) -> int:
+        low = _concept_identity_key(name)
+        if any(k in low for k in ["charge", "electron", "potentialdifference", "electricpotential", "field"]):
+            return 0
+        if any(k in low for k in ["voltage", "current", "resistance", "circuit", "conductor", "insulator"]):
+            return 1
+        if any(k in low for k in ["law", "equation", "relationship", "formula", "proportional"]):
+            return 2
+        if any(k in low for k in ["meter", "voltmeter", "ammeter", "multimeter", "supply", "resistor", "code", "measurement"]):
+            return 3
+        return 2
+
+    def add_edge(source: str, target: str) -> None:
+        if not source or not target or source == target:
+            return
+        key = (_concept_identity_key(source), _concept_identity_key(target), "PREREQUISITE_OF")
+        if key in seen:
+            return
+        seen.add(key)
+        inferred.append({"from": source, "to": target, "type": "PREREQUISITE_OF"})
+
+    for source in node_names:
+        s_rank = rank(source)
+        source_words = set(re.findall(r"[a-z]+", source.lower()))
+        for target in node_names:
+            if source == target:
+                continue
+            t_rank = rank(target)
+            target_words = set(re.findall(r"[a-z]+", target.lower()))
+            source_low = source.lower()
+            target_low = target.lower()
+            related = bool(source_words & target_words)
+            if any(k in target_low for k in ["law", "equation", "relationship", "formula"]):
+                related = s_rank <= 1
+            if "voltmeter" in target_low:
+                related = related or any(k in source_low for k in ["voltage", "potential"])
+            if "ammeter" in target_low:
+                related = related or "current" in source_low
+            if "ohmmeter" in target_low:
+                related = related or "resistance" in source_low
+            if "multimeter" in target_low:
+                related = related or any(k in source_low for k in ["voltage", "current", "resistance"])
+            if s_rank < t_rank and related:
+                add_edge(source, target)
+                if not any(k in target_low for k in ["law", "equation", "relationship", "formula"]):
+                    break
+
     return inferred
 
 
@@ -1129,6 +1227,20 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         concepts_keywords = [n for n in canonical_nodes if n.get("label") in ["Concept", "Keyword", "Method", "Dataset"]]
         other_nodes = [n for n in canonical_nodes if n.get("label") not in ["Concept", "Keyword", "Method", "Dataset"]]
 
+        if total_chunks and fallback_chunks == total_chunks:
+            fallback_junk = {
+                "just", "stuck", "relation", "fashion", "board", "lower panel", "second digit",
+                "fourth color", "black wire", "green wire", "white wire", "purple wire", "below red wire",
+                "case red wire", "because current", "called insulator", "form i", "form v",
+                "only one wire leading", "so much wire involved", "expect changes in direction",
+                "off all electronic", "other lead",
+            }
+            concepts_keywords = [
+                n for n in concepts_keywords
+                if n.get("name", "").lower().strip() not in fallback_junk
+                and not re.search(r"\b(?:wire|lead|panel|digit|band|plug|terminal|setting)\b", n.get("name", ""), re.IGNORECASE)
+            ]
+
         # Prioritize noun phrases and technical terms
         def get_priority_bonus(name: str) -> float:
             # Check if multi-word phrase (noun phrase)
@@ -1145,8 +1257,9 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             reverse=True
         )
 
-        # Keep top 80 concepts/keywords/methods/datasets
-        kept_concepts_keywords = concepts_keywords[:80]
+        # Keep a tighter graph when every chunk used local fallback; this avoids noisy phrase clouds.
+        max_kept = 28 if (total_chunks and fallback_chunks == total_chunks) else 80
+        kept_concepts_keywords = concepts_keywords[:max_kept]
         kept_names = set(n["name"].lower().strip() for n in kept_concepts_keywords)
         for n in other_nodes:
             kept_names.add(n["name"].lower().strip())
