@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import urllib.request
+import urllib.error
 from types import SimpleNamespace
 from server.config import config
 
@@ -311,6 +312,7 @@ class LLMClient:
     def __init__(self):
         self._client = None
         self._anthropic_client = None
+        self._anthropic_http = False
         self._is_mock = False
 
         if config.ANTHROPIC_API_KEY and "mock" not in config.ANTHROPIC_API_KEY.lower() and Anthropic:
@@ -323,6 +325,10 @@ class LLMClient:
                 logger.info("Successfully connected to Anthropic API.")
             except Exception as e:
                 logger.warning(f"Failed to initialize Anthropic client: {e}.")
+        elif config.ANTHROPIC_API_KEY and "mock" not in config.ANTHROPIC_API_KEY.lower():
+            self._anthropic_http = True
+            self._is_mock = False
+            logger.info("Anthropic SDK unavailable; using lightweight Anthropic HTTP client.")
 
         if config.GROQ_API_KEY and "mock-api-key" not in config.GROQ_API_KEY:
             try:
@@ -336,9 +342,39 @@ class LLMClient:
             except Exception as e:
                 logger.warning(f"Failed to initialize Groq client: {e}.")
 
-        if not self._anthropic_client and not self._client:
+        if not self._anthropic_client and not self._anthropic_http and not self._client:
             logger.warning("No valid LLM API key detected. Starting LLM client in mock mode.")
             self._is_mock = True
+
+    def _anthropic_complete(self, system_prompt: str, user_prompt: str, max_tokens: int, temperature: float = 0) -> str:
+        payload = json.dumps({
+            "model": config.ANTHROPIC_MODEL,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_prompt}],
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=payload,
+            headers={
+                "x-api-key": config.ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=config.LLM_TIMEOUT_SECONDS) as res:
+                data = json.loads(res.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Anthropic HTTP {e.code}: {detail[:500]}") from e
+        return "".join(
+            block.get("text", "")
+            for block in data.get("content", [])
+            if block.get("type") == "text"
+        ).strip()
 
     def _complete_text(self, system_prompt: str, user_prompt: str, max_tokens: int, temperature: float = 0, prefer_anthropic: bool = False) -> str:
         if prefer_anthropic and self._anthropic_client:
@@ -353,6 +389,8 @@ class LLMClient:
                 block.text for block in response.content
                 if getattr(block, "type", None) == "text" and getattr(block, "text", None)
             ).strip()
+        if prefer_anthropic and self._anthropic_http:
+            return self._anthropic_complete(system_prompt, user_prompt, max_tokens, temperature)
 
         if self._client:
             response = self._client.chat.completions.create(
@@ -378,6 +416,8 @@ class LLMClient:
                 block.text for block in response.content
                 if getattr(block, "type", None) == "text" and getattr(block, "text", None)
             ).strip()
+        if self._anthropic_http:
+            return self._anthropic_complete(system_prompt, user_prompt, max_tokens, temperature)
 
         raise RuntimeError("No LLM provider available.")
 
