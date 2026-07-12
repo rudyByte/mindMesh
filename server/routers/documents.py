@@ -4,6 +4,7 @@ import datetime
 import logging
 import json
 from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
 from pypdf import PdfReader
@@ -81,15 +82,36 @@ def _load_json_state(kind: str, key: str):
         return None
 
 
-def _save_doc_status(doc_id: str, status: str, progress_pct: int, error: Optional[str] = None, session_id: Optional[str] = None) -> None:
-    extraction_status_cache[doc_id] = {"status": status, "progress_pct": progress_pct, "error": error}
-    _save_json_state("doc-status", doc_id, {
+def _save_doc_status(
+    doc_id: str,
+    status: str,
+    progress_pct: int,
+    error: Optional[str] = None,
+    session_id: Optional[str] = None,
+    failed_chunks: Optional[int] = None,
+    total_chunks: Optional[int] = None,
+    extraction_mode: Optional[str] = None,
+) -> None:
+    previous = extraction_status_cache.get(doc_id) or _load_json_state("doc-status", doc_id) or {}
+    payload = {
         "id": doc_id,
         "session_id": session_id,
         "status": status,
         "progress_pct": progress_pct,
         "error": error,
-    })
+        "failed_chunks": failed_chunks if failed_chunks is not None else previous.get("failed_chunks", 0),
+        "total_chunks": total_chunks if total_chunks is not None else previous.get("total_chunks", 0),
+        "extraction_mode": extraction_mode or previous.get("extraction_mode"),
+    }
+    extraction_status_cache[doc_id] = {
+        "status": payload["status"],
+        "progress_pct": payload["progress_pct"],
+        "error": payload["error"],
+        "failed_chunks": payload["failed_chunks"],
+        "total_chunks": payload["total_chunks"],
+        "extraction_mode": payload["extraction_mode"],
+    }
+    _save_json_state("doc-status", doc_id, payload)
 
 
 def _save_session_doc(session_id: Optional[str], doc: dict) -> None:
@@ -193,6 +215,9 @@ class StatusResponse(BaseModel):
     status: str
     progress_pct: int
     error: str | None = None
+    failed_chunks: int = 0
+    total_chunks: int = 0
+    extraction_mode: str | None = None
 
 def is_acronym_of(a: str, p: str) -> bool:
     a_clean = re.sub(r'[^a-zA-Z]', '', a).upper()
@@ -497,6 +522,8 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
 
 
 def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, session_id: str):
+    failed_chunks = 0
+    total_chunks = 0
     _save_doc_status(doc_id, "processing", 10, None, session_id)
     
     try:
@@ -512,8 +539,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         main_topic_info = llm_client.identify_main_topic(text[:15000], filename)
         logger.info(f"Identified main topic: {main_topic_info}")
         
-        # 2. Chunk text
-        # ~1500 tokens is roughly 6000 characters
+        # 2. Chunk full document. No large-document shortcut: every chunk is read.
+        # ~1500 tokens is roughly 6000 characters; overlap preserves cross-page concepts.
         chunk_size = 6000
         overlap = 800
         chunks = []
@@ -525,72 +552,98 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 break
             start += chunk_size - overlap
             
-        logger.info(f"Split document into {len(chunks)} chunks.")
-        _save_doc_status(doc_id, "processing", 40, None, session_id)
+        total_chunks = len(chunks)
+        failed_chunks = 0
+        logger.info(f"Split document into {total_chunks} chunks.")
+        _save_doc_status(
+            doc_id,
+            "processing",
+            40,
+            None,
+            session_id,
+            failed_chunks=0,
+            total_chunks=total_chunks,
+            extraction_mode="full_document_chunked",
+        )
         
         # 3. For each chunk, extract nodes/relationships using LLM client
         all_nodes = []
         all_relationships = []
 
-        use_fast_extraction = vercel_blob_client.is_configured() and (len(chunks) > 3 or len(file_bytes) > 3 * 1024 * 1024)
-        if use_fast_extraction:
-            logger.info(f"Using serverless-safe hierarchical extraction for {filename}: {len(chunks)} chunks, {len(file_bytes)} bytes")
+        def extract_one_chunk(chunk_index: int, chunk_text: str) -> tuple[list, list, bool]:
             try:
-                fast_result = llm_client.extract_hierarchical_graph_from_document(
-                    _sample_document_text(text),
-                    filename,
-                    main_topic_info,
-                )
-            except Exception:
-                logger.warning("Falling back to local dynamic hierarchy extraction.")
-                fast_result = _build_dynamic_fallback_graph(text, filename, main_topic_info)
-            all_nodes = fast_result.get("nodes", [])
-            all_relationships = fast_result.get("relationships", [])
-            _save_doc_status(doc_id, "processing", 90, None, session_id)
-        else:
-            step_increment = 50 / len(chunks) if chunks else 50
-            
-            for i, chunk in enumerate(chunks):
+                result = llm_client.extract_graph_from_chunk(chunk_text, include_prerequisites=False)
+                chunk_failed = False
+            except Exception as first_error:
+                logger.error(f"Error extracting chunk {chunk_index} for doc {doc_id}: {first_error}")
                 try:
-                    # Call LLM extraction (will use mock extraction if Anthropic key is mock)
-                    result = llm_client.extract_graph_from_chunk(chunk)
-                    extracted_nodes = result.get("nodes", [])
-                    extracted_rels = result.get("relationships", [])
-                    
-                    # Clean node names immediately after extraction
-                    for node in extracted_nodes:
-                        node["name"] = normalize_and_clean_concept_name(node.get("name", ""))
-                    # Clean relationship from/to names
-                    for rel in extracted_rels:
-                        rel["from"] = normalize_and_clean_concept_name(rel.get("from", ""))
-                        rel["to"] = normalize_and_clean_concept_name(rel.get("to", ""))
-                    
-                    all_nodes.extend(extracted_nodes)
-                    all_relationships.extend(extracted_rels)
-                except Exception as e:
-                    logger.error(f"Error extracting chunk {i} for doc {doc_id}: {e}")
-                    # Retry once
+                    result = llm_client.extract_graph_from_chunk(chunk_text, include_prerequisites=False)
+                    chunk_failed = False
+                except Exception as retry_error:
+                    logger.error(f"Retry failed for chunk {chunk_index} in doc {doc_id}: {retry_error}")
+                    # Per-chunk local fallback only; never replace the whole document graph.
+                    result = _build_dynamic_fallback_graph(
+                        chunk_text,
+                        f"{filename} chunk {chunk_index + 1}",
+                        main_topic_info,
+                    )
+                    chunk_failed = True
+
+            extracted_nodes = result.get("nodes", [])
+            extracted_rels = result.get("relationships", [])
+
+            for node in extracted_nodes:
+                node["name"] = normalize_and_clean_concept_name(node.get("name", ""))
+            for rel in extracted_rels:
+                rel["from"] = normalize_and_clean_concept_name(rel.get("from", ""))
+                rel["to"] = normalize_and_clean_concept_name(rel.get("to", ""))
+
+            return extracted_nodes, extracted_rels, chunk_failed
+
+        if chunks:
+            max_workers = min(4, total_chunks)
+            completed_chunks = 0
+            logger.info(f"Using full-document chunk extraction for {filename}: {total_chunks} chunks, {max_workers} workers")
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(extract_one_chunk, i, chunk): i
+                    for i, chunk in enumerate(chunks)
+                }
+                for future in as_completed(futures):
+                    i = futures[future]
                     try:
-                        result = llm_client.extract_graph_from_chunk(chunk)
-                        extracted_nodes = result.get("nodes", [])
-                        extracted_rels = result.get("relationships", [])
-                        
-                        # Clean node names immediately after extraction
-                        for node in extracted_nodes:
-                            node["name"] = normalize_and_clean_concept_name(node.get("name", ""))
-                        # Clean relationship from/to names
-                        for rel in extracted_rels:
-                            rel["from"] = normalize_and_clean_concept_name(rel.get("from", ""))
-                            rel["to"] = normalize_and_clean_concept_name(rel.get("to", ""))
-                        
+                        extracted_nodes, extracted_rels, chunk_failed = future.result()
                         all_nodes.extend(extracted_nodes)
                         all_relationships.extend(extracted_rels)
-                    except Exception:
-                        logger.error(f"Retry failed for chunk {i}. Skipping.")
-                
-                # Update progress
-                current_progress = int(40 + (i + 1) * step_increment)
-                _save_doc_status(doc_id, "processing", min(90, current_progress), None, session_id)
+                        if chunk_failed:
+                            failed_chunks += 1
+                    except Exception as e:
+                        # Defensive: extract_one_chunk should already fallback, but status must never lie.
+                        logger.error(f"Unhandled chunk worker failure for chunk {i} in doc {doc_id}: {e}")
+                        failed_chunks += 1
+                    completed_chunks += 1
+                    current_progress = int(40 + (completed_chunks / total_chunks) * 50)
+                    _save_doc_status(
+                        doc_id,
+                        "processing",
+                        min(90, current_progress),
+                        None,
+                        session_id,
+                        failed_chunks=failed_chunks,
+                        total_chunks=total_chunks,
+                        extraction_mode="full_document_chunked",
+                    )
+        else:
+            _save_doc_status(
+                doc_id,
+                "processing",
+                90,
+                None,
+                session_id,
+                failed_chunks=0,
+                total_chunks=0,
+                extraction_mode="full_document_chunked",
+            )
             
         # Implement explicit Regex/Stop-Word Blacklist for broken or non-academic terms
         STOP_WORDS_BLACKLIST = {"become", "becomes", "became", "want", "learn", "how", "to", "the", "with", "variabl"}
@@ -620,36 +673,10 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             # Filter out low-value nodes automatically
             all_nodes = [n for n in all_nodes if calculate_entity_quality(n.get("name", ""), n.get("label", "Concept")) > 0.7]
 
-        # Check multi-document mode config
+        # Persistent multi-document mode: never wipe existing graph content on upload.
+        # New concepts/papers/authors are merged into the active session/user graph below.
         from server.config import config
-        multi_doc_mode = False # Force database wipe on every new document upload to guarantee isolation
-
-        if not multi_doc_mode:
-            # Clear all cached data, previous uploads, embeddings, vector-store entries, and session memory
-            # keeping only the current doc_id status to keep it polling!
-            for k in list(extraction_status_cache.keys()):
-                if k != doc_id:
-                    extraction_status_cache.pop(k, None)
-            
-            # Clear files from storage (except the current document)
-            try:
-                supabase_client.clear_bucket("documents", exclude_prefix=f"{doc_id}_")
-            except Exception as e:
-                logger.error(f"Failed to clear storage bucket: {e}")
-
-            if neo4j_client.is_mock():
-                # Clear mock nodes/edges but preserve the current Document node
-                current_doc = neo4j_client.mock_nodes.get(doc_id)
-                neo4j_client.mock_nodes.clear()
-                neo4j_client.mock_edges.clear()
-                if current_doc:
-                    neo4j_client.mock_nodes[doc_id] = current_doc
-            else:
-                # Delete all nodes except the current Document node
-                neo4j_client.run_query(
-                    "MATCH (n) WHERE NOT (n:Document AND n.id = $doc_id) DETACH DELETE n",
-                    {"doc_id": doc_id}
-                )
+        multi_doc_mode = True
 
         # 4. Idempotent Merge Writes to Neo4j
         # Prepare the central node
@@ -664,14 +691,55 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         # Add central node to the list of nodes
         all_nodes.append(central_node)
         
-        # Per-upload isolation: do not merge nodes from older PDFs in the same browser session.
-        # This prevents graph contamination when a student uploads a new document.
+        # Session-wide node merging: merge current extraction with existing graph nodes
+        # so repeated concepts across documents become one connected concept.
         existing_nodes = []
+        if session_id:
+            try:
+                if neo4j_client.is_mock():
+                    for mn in neo4j_client.mock_nodes.values():
+                        if mn.get("session_id") == session_id and mn.get("label") not in ["Document", "Note", "Highlight", "Citation"]:
+                            existing_nodes.append({
+                                "label": mn.get("label", "Concept"),
+                                "name": mn.get("name") or mn.get("title") or "",
+                                "description": mn.get("description", ""),
+                                "difficulty_level": mn.get("difficulty_level", "Beginner"),
+                                "level": mn.get("level"),
+                                "is_existing": True
+                            })
+                else:
+                    query = """
+                    MATCH (n)
+                    WHERE n.session_id = $session_id AND NOT n:Document AND NOT n:Note AND NOT n:Highlight AND NOT n:Citation
+                    RETURN labels(n)[0] as label, coalesce(n.name, n.title) as name, n.description as description, n.difficulty_level as difficulty_level, n.level as level
+                    """
+                    res = neo4j_client.run_query(query, {"session_id": session_id})
+                    for r in res:
+                        existing_nodes.append({
+                            "label": r.get("label") or "Concept",
+                            "name": r.get("name") or "",
+                            "description": r.get("description") or "",
+                            "difficulty_level": r.get("difficulty_level") or "Beginner",
+                            "level": r.get("level"),
+                            "is_existing": True
+                        })
+                logger.info(f"Retrieved {len(existing_nodes)} existing nodes from session {session_id} for persistent graph merging.")
+            except Exception as e:
+                logger.error(f"Failed to fetch existing session nodes for merging: {e}")
 
         all_nodes_combined = existing_nodes + all_nodes
 
         # Run global semantic merging and clustering
         canonical_nodes, name_mapping = cluster_and_merge_nodes(all_nodes_combined)
+        current_canonical_names = {
+            name_mapping.get(n.get("name", "").lower().strip(), n.get("name", "")).lower().strip()
+            for n in all_nodes
+            if n.get("name")
+        }
+        canonical_nodes = [
+            n for n in canonical_nodes
+            if n.get("name", "").lower().strip() in current_canonical_names
+        ]
         
         # Verify that every graph node exists in the current document text
         original_count = len(canonical_nodes)
@@ -1204,7 +1272,13 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 MATCH (a {{name: $from_name, session_id: $session_id}})
                 MATCH (b {{name: $to_name, session_id: $session_id}})
                 MERGE (a)-[r:{rel_type}]->(b)
-                SET r.session_id = $session_id, r.doc_id = $doc_id
+                ON CREATE SET r.session_id = $session_id, r.doc_id = $doc_id, r.doc_ids = [$doc_id]
+                ON MATCH SET r.session_id = $session_id,
+                             r.doc_id = coalesce(r.doc_id, $doc_id),
+                             r.doc_ids = CASE
+                               WHEN $doc_id IN coalesce(r.doc_ids, []) THEN r.doc_ids
+                               ELSE coalesce(r.doc_ids, []) + $doc_id
+                             END
                 """
                 neo4j_client.run_query(query, {"from_name": from_name, "to_name": to_name, "session_id": session_id, "doc_id": doc_id})
             else:
@@ -1212,7 +1286,12 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 MATCH (a {{name: $from_name, doc_id: $doc_id}})
                 MATCH (b {{name: $to_name, doc_id: $doc_id}})
                 MERGE (a)-[r:{rel_type}]->(b)
-                SET r.doc_id = $doc_id
+                ON CREATE SET r.doc_id = $doc_id, r.doc_ids = [$doc_id]
+                ON MATCH SET r.doc_id = coalesce(r.doc_id, $doc_id),
+                             r.doc_ids = CASE
+                               WHEN $doc_id IN coalesce(r.doc_ids, []) THEN r.doc_ids
+                               ELSE coalesce(r.doc_ids, []) + $doc_id
+                             END
                 """
                 neo4j_client.run_query(query, {"from_name": from_name, "to_name": to_name, "doc_id": doc_id})
             
@@ -1239,7 +1318,16 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                     
         # Update status to done
         _persist_mock_session_graph(session_id)
-        _save_doc_status(doc_id, "done", 100, None, session_id)
+        _save_doc_status(
+            doc_id,
+            "done",
+            100,
+            None,
+            session_id,
+            failed_chunks=failed_chunks,
+            total_chunks=total_chunks,
+            extraction_mode="full_document_chunked",
+        )
         _save_session_doc(session_id, {
             "id": doc_id,
             "title": filename,
@@ -1249,8 +1337,15 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         
         # Save completed status to Neo4j node
         neo4j_client.run_query(
-            "MATCH (d:Document {id: $doc_id}) SET d.status = 'done', d.progress_pct = 100",
-            {"doc_id": doc_id}
+            """
+            MATCH (d:Document {id: $doc_id})
+            SET d.status = 'done',
+                d.progress_pct = 100,
+                d.failed_chunks = $failed_chunks,
+                d.total_chunks = $total_chunks,
+                d.extraction_mode = 'full_document_chunked'
+            """,
+            {"doc_id": doc_id, "failed_chunks": failed_chunks, "total_chunks": total_chunks}
         )
         logger.info(f"Extraction pipeline completed successfully for document {doc_id}.")
         
@@ -1258,7 +1353,16 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         logger.error(f"Extraction failed for document {doc_id}: {e}")
         error_msg = str(e)
         _persist_mock_session_graph(session_id)
-        _save_doc_status(doc_id, "error", 100, error_msg, session_id)
+        _save_doc_status(
+            doc_id,
+            "error",
+            100,
+            error_msg,
+            session_id,
+            failed_chunks=failed_chunks,
+            total_chunks=total_chunks,
+            extraction_mode="full_document_chunked",
+        )
         _save_session_doc(session_id, {
             "id": doc_id,
             "title": filename,
@@ -1285,8 +1389,15 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             logger.error(f"Failed to clean up contaminated nodes/edges for failed doc {doc_id}: {cleanup_err}")
 
         neo4j_client.run_query(
-            "MATCH (d:Document {id: $doc_id}) SET d.status = 'error', d.error_msg = $error",
-            {"doc_id": doc_id, "error": error_msg}
+            """
+            MATCH (d:Document {id: $doc_id})
+            SET d.status = 'error',
+                d.error_msg = $error,
+                d.failed_chunks = $failed_chunks,
+                d.total_chunks = $total_chunks,
+                d.extraction_mode = 'full_document_chunked'
+            """,
+            {"doc_id": doc_id, "error": error_msg, "failed_chunks": failed_chunks, "total_chunks": total_chunks}
         )
 def delete_document_internal(doc_id: str, session_id: Optional[str] = None):
     import os
@@ -1345,19 +1456,22 @@ def delete_document_internal(doc_id: str, session_id: Optional[str] = None):
         for cid in citation_ids:
             neo4j_client.mock_nodes.pop(cid, None)
 
-        # Pop doc node
+        # Pop doc node and this document's own edges. Keep shared concept nodes
+        # if any surviving edge from another document still references them.
         neo4j_client.mock_nodes.pop(doc_id, None)
-        # Pop nodes tagged with doc_id
-        nodes_to_delete = {nid for nid, n in neo4j_client.mock_nodes.items() if n.get("doc_id") == doc_id}
-        for nid in nodes_to_delete:
-            neo4j_client.mock_nodes.pop(nid, None)
-            
-        # Pop edges
-        deleted_ids = {doc_id} | nodes_to_delete | highlight_ids | citation_ids
+        candidate_node_ids = {nid for nid, n in neo4j_client.mock_nodes.items() if n.get("doc_id") == doc_id}
+        deleted_ids = {doc_id} | highlight_ids | citation_ids
         neo4j_client.mock_edges = [
-            e for e in neo4j_client.mock_edges 
-            if e["from"] not in deleted_ids and e["to"] not in deleted_ids
+            e for e in neo4j_client.mock_edges
+            if e.get("doc_id") != doc_id and e.get("from") not in deleted_ids and e.get("to") not in deleted_ids
         ]
+        still_referenced = set()
+        for e in neo4j_client.mock_edges:
+            still_referenced.add(e.get("from"))
+            still_referenced.add(e.get("to"))
+        for nid in candidate_node_ids:
+            if nid not in still_referenced:
+                neo4j_client.mock_nodes.pop(nid, None)
         # Pop from status cache
         extraction_status_cache.pop(doc_id, None)
     else:
@@ -1365,8 +1479,35 @@ def delete_document_internal(doc_id: str, session_id: Optional[str] = None):
         neo4j_client.run_query("MATCH (h:Highlight)-[:EXTRACTED_FROM]->(d:Document {id: $doc_id}) DETACH DELETE h", {"doc_id": doc_id})
         # 2. Delete citations linked to papers of this document
         neo4j_client.run_query("MATCH (c:Citation)-[:FOR_PAPER]->(p:Paper {doc_id: $doc_id}) DETACH DELETE c", {"doc_id": doc_id})
-        # 3. Delete doc and its nodes/edges from Neo4j
-        neo4j_client.run_query("MATCH (n) WHERE n.doc_id = $doc_id DETACH DELETE n", {"doc_id": doc_id})
+        # 3. Delete this document's contribution without deleting concepts also linked to other documents.
+        neo4j_client.run_query(
+            """
+            MATCH ()-[r]->()
+            WHERE $doc_id IN coalesce(r.doc_ids, [])
+            SET r.doc_ids = [x IN r.doc_ids WHERE x <> $doc_id]
+            """,
+            {"doc_id": doc_id}
+        )
+        neo4j_client.run_query(
+            """
+            MATCH ()-[r]->()
+            WHERE r.doc_id = $doc_id AND (r.doc_ids IS NULL OR size(r.doc_ids) = 0)
+            DELETE r
+            """,
+            {"doc_id": doc_id}
+        )
+        neo4j_client.run_query(
+            """
+            MATCH (d:Document {id: $doc_id})-[r:CONTAINS]->(n)
+            DELETE r
+            WITH collect(n) AS touched
+            UNWIND touched AS n
+            WITH n
+            WHERE NOT ( (:Document)-[:CONTAINS]->(n) )
+            DETACH DELETE n
+            """,
+            {"doc_id": doc_id}
+        )
         neo4j_client.run_query("MATCH (d:Document {id: $doc_id}) DETACH DELETE d", {"doc_id": doc_id})
         extraction_status_cache.pop(doc_id, None)
 
@@ -1383,52 +1524,9 @@ def _process_file_upload(
         if replace_doc_id:
             delete_document_internal(replace_doc_id, session_id)
 
-        # Clear state if not multi-document mode
-        from server.config import config
-        multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False) or (session_id is not None)
-        if not multi_doc_mode:
-            extraction_status_cache.clear()
-            try:
-                supabase_client.clear_bucket("documents")
-            except Exception as e:
-                logger.error(f"Failed to clear storage bucket: {e}")
-            if neo4j_client.is_mock():
-                neo4j_client.mock_nodes.clear()
-                neo4j_client.mock_edges.clear()
-            else:
-                try:
-                    neo4j_client.run_query("MATCH (n) DETACH DELETE n")
-                except Exception as e:
-                    logger.error(f"Failed to clear Neo4j on upload: {e}")
-
         # Generate unique document ID
         doc_id = str(uuid.uuid4())
         path = f"uploads/{doc_id}_{filename}"
-
-        if session_id:
-            _save_json_state("session-graph", session_id, {"nodes": [], "edges": []})
-            _save_json_state("session-docs", session_id, [])
-            if neo4j_client.is_mock():
-                old_ids = {
-                    nid for nid, n in neo4j_client.mock_nodes.items()
-                    if n.get("session_id") == session_id and n.get("label") != "Document"
-                }
-                neo4j_client.mock_nodes = {
-                    nid: n for nid, n in neo4j_client.mock_nodes.items()
-                    if n.get("session_id") != session_id
-                }
-                neo4j_client.mock_edges = [
-                    e for e in neo4j_client.mock_edges
-                    if e.get("session_id") != session_id and e.get("from") not in old_ids and e.get("to") not in old_ids
-                ]
-            else:
-                try:
-                    neo4j_client.run_query(
-                        "MATCH (n) WHERE n.session_id = $session_id DETACH DELETE n",
-                        {"session_id": session_id},
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to clear previous session graph before upload: {e}")
 
         # Upload to durable storage. On Vercel, Blob is available and serverless-safe;
         # Supabase remains the fallback for local/dev deployments configured with it.
@@ -1444,7 +1542,8 @@ def _process_file_upload(
         MERGE (d:Document {id: $id})
         ON CREATE SET d.title = $title, d.type = 'pdf', d.upload_date = $upload_date, 
                       d.storage_url = $storage_url, d.status = 'processing', d.progress_pct = 10,
-                      d.session_id = $session_id
+                      d.session_id = $session_id, d.failed_chunks = 0, d.total_chunks = 0,
+                      d.extraction_mode = 'full_document_chunked'
         RETURN d
         """
         neo4j_client.run_query(query, {
@@ -1679,18 +1778,32 @@ def get_document_status(id: str, session_id: Optional[str] = Query(None)):
         return StatusResponse(
             status=persisted_status.get("status") or "processing",
             progress_pct=persisted_status.get("progress_pct") or 10,
-            error=persisted_status.get("error")
+            error=persisted_status.get("error"),
+            failed_chunks=persisted_status.get("failed_chunks") or 0,
+            total_chunks=persisted_status.get("total_chunks") or 0,
+            extraction_mode=persisted_status.get("extraction_mode")
         )
         
     # Check database next
-    query = "MATCH (d:Document {id: $id}) RETURN d.status as status, d.progress_pct as progress_pct, d.error_msg as error_msg"
+    query = """
+    MATCH (d:Document {id: $id})
+    RETURN d.status as status,
+           d.progress_pct as progress_pct,
+           d.error_msg as error_msg,
+           d.failed_chunks as failed_chunks,
+           d.total_chunks as total_chunks,
+           d.extraction_mode as extraction_mode
+    """
     res = neo4j_client.run_query(query, {"id": id})
     if res:
         record = res[0]
         return StatusResponse(
             status=record.get("status") or "processing",
             progress_pct=record.get("progress_pct") or 10,
-            error=record.get("error_msg")
+            error=record.get("error_msg"),
+            failed_chunks=record.get("failed_chunks") or 0,
+            total_chunks=record.get("total_chunks") or 0,
+            extraction_mode=record.get("extraction_mode")
         )
         
     raise HTTPException(status_code=404, detail="Document not found.")

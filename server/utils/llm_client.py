@@ -4,6 +4,11 @@ import re
 from openai import OpenAI
 from server.config import config
 
+try:
+    from anthropic import Anthropic
+except Exception:  # pragma: no cover - optional provider
+    Anthropic = None
+
 logger = logging.getLogger("llm_client")
 
 def normalize_and_clean_concept_name(name: str) -> str:
@@ -238,20 +243,80 @@ def singularize_concept_name(name: str) -> str:
 class LLMClient:
     def __init__(self):
         self._client = None
+        self._anthropic_client = None
         self._is_mock = False
+
+        if config.ANTHROPIC_API_KEY and "mock" not in config.ANTHROPIC_API_KEY.lower() and Anthropic:
+            try:
+                self._anthropic_client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
+                self._is_mock = False
+                logger.info("Successfully connected to Anthropic API.")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Anthropic client: {e}.")
 
         if config.GROQ_API_KEY and "mock-api-key" not in config.GROQ_API_KEY:
             try:
                 self._client = OpenAI(api_key=config.GROQ_API_KEY, base_url=config.GROQ_BASE_URL)
                 self._is_mock = False
                 logger.info("Successfully connected to Groq API.")
-                return
             except Exception as e:
                 logger.warning(f"Failed to initialize Groq client: {e}.")
-        else:
-            logger.warning("No valid Groq API key detected. Starting LLM client in mock mode.")
 
-        self._is_mock = True
+        if not self._anthropic_client and not self._client:
+            logger.warning("No valid LLM API key detected. Starting LLM client in mock mode.")
+            self._is_mock = True
+
+    def _complete_text(self, system_prompt: str, user_prompt: str, max_tokens: int, temperature: float = 0, prefer_anthropic: bool = False) -> str:
+        if prefer_anthropic and self._anthropic_client:
+            response = self._anthropic_client.messages.create(
+                model=config.ANTHROPIC_MODEL,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            return "".join(
+                block.text for block in response.content
+                if getattr(block, "type", None) == "text" and getattr(block, "text", None)
+            ).strip()
+
+        if self._client:
+            response = self._client.chat.completions.create(
+                model=config.GROQ_MODEL,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+            return response.choices[0].message.content.strip()
+
+        if self._anthropic_client:
+            response = self._anthropic_client.messages.create(
+                model=config.ANTHROPIC_MODEL,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            return "".join(
+                block.text for block in response.content
+                if getattr(block, "type", None) == "text" and getattr(block, "text", None)
+            ).strip()
+
+        raise RuntimeError("No LLM provider available.")
+
+    @staticmethod
+    def _strip_json_fences(content: str) -> str:
+        content = content.strip()
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.startswith("```"):
+            content = content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+        return content.strip()
 
     def identify_main_topic(self, sample_text: str, filename: str) -> dict:
         if self._is_mock:
@@ -267,25 +332,13 @@ class LLMClient:
         )
         
         try:
-            response = self._client.chat.completions.create(
-                model=config.GROQ_MODEL,
+            content = self._strip_json_fences(self._complete_text(
+                system_prompt,
+                f"Filename: {filename}\n\nText sample:\n\n{sample_text[:8000]}",
                 max_tokens=1000,
                 temperature=0,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Filename: {filename}\n\nText sample:\n\n{sample_text[:8000]}"}
-                ]
-            )
-            content = response.choices[0].message.content.strip()
-            
-            # Clean markdown JSON fences if LLM generated them
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.startswith("```"):
-                content = content[3:]
-            if content.endswith("```"):
-                content = content[:-3]
-            content = content.strip()
+                prefer_anthropic=False,
+            ))
             
             data = json.loads(content)
             if "name" in data and "description" in data:
@@ -309,7 +362,7 @@ class LLMClient:
             "name": clean_name,
             "description": f"Unified knowledge map and conceptual analysis of the document {filename}."
         }
-    def extract_graph_from_chunk(self, text_chunk: str) -> dict:
+    def extract_graph_from_chunk(self, text_chunk: str, include_prerequisites: bool = True) -> dict:
         if self._is_mock:
             return self._run_mock_extraction(text_chunk)
             
@@ -365,25 +418,13 @@ class LLMClient:
         )
         
         try:
-            response = self._client.chat.completions.create(
-                model=config.GROQ_MODEL,
+            content = self._strip_json_fences(self._complete_text(
+                system_prompt,
+                f"Extract graph elements from this text chunk:\n\n{text_chunk}",
                 max_tokens=4000,
                 temperature=0,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Extract graph elements from this text chunk:\n\n{text_chunk}"}
-                ]
-            )
-            content = response.choices[0].message.content.strip()
-            
-            # Clean markdown JSON fences if LLM generated them
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.startswith("```"):
-                content = content[3:]
-            if content.endswith("```"):
-                content = content[:-3]
-            content = content.strip()
+                prefer_anthropic=True,
+            ))
             
             data = json.loads(content)
             if "nodes" in data and "relationships" in data:
@@ -391,7 +432,7 @@ class LLMClient:
                 relationships = data["relationships"]
                 
                 concept_names = [n.get("name") for n in nodes if n.get("name")]
-                if concept_names:
+                if include_prerequisites and concept_names:
                     prereq_prompt = (
                         "You are building a learning roadmap.\n\n"
                         "Below is a text chunk and the concepts extracted from it.\n\n"
@@ -408,23 +449,13 @@ class LLMClient:
                     )
                     
                     try:
-                        prereq_response = self._client.chat.completions.create(
-                            model=config.GROQ_MODEL,
+                        prereq_content = self._strip_json_fences(self._complete_text(
+                            prereq_prompt,
+                            f"Text Chunk:\n{text_chunk}\n\nReturn the JSON with prerequisite relationships.",
                             max_tokens=1500,
                             temperature=0.0,
-                            messages=[
-                                {"role": "system", "content": prereq_prompt},
-                                {"role": "user", "content": f"Text Chunk:\n{text_chunk}\n\nReturn the JSON with prerequisite relationships."}
-                            ]
-                        )
-                        prereq_content = prereq_response.choices[0].message.content.strip()
-                        if prereq_content.startswith("```json"):
-                            prereq_content = prereq_content[7:]
-                        if prereq_content.startswith("```"):
-                            prereq_content = prereq_content[3:]
-                        if prereq_content.endswith("```"):
-                            prereq_content = prereq_content[:-3]
-                        prereq_content = prereq_content.strip()
+                            prefer_anthropic=True,
+                        ))
                         
                         prereq_data = json.loads(prereq_content)
                         if "relationships" in prereq_data:
