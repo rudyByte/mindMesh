@@ -94,10 +94,12 @@ def _ocr_pdf_pages(file_bytes: bytes) -> tuple[list[str], float | None]:
     for page_index in range(min(len(doc), max_pages)):
         page = doc.load_page(page_index)
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-        image = pix.pil_image()
         if rapid_engine is not None:
             import numpy as np
-            result = rapid_engine(np.array(image))
+            image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+            if pix.n > 3:
+                image = image[:, :, :3]
+            result = rapid_engine(image)
             page_lines = []
             if isinstance(result, tuple):
                 result = result[0]
@@ -119,6 +121,7 @@ def _ocr_pdf_pages(file_bytes: bytes) -> tuple[list[str], float | None]:
                             pass
             ocr_pages.append("\n".join(page_lines))
         else:
+            image = pix.pil_image()
             page_text = tesseract.image_to_string(image)
             ocr_pages.append(page_text or "")
             try:
