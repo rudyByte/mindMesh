@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useStore, GraphNode, GraphEdge } from '../store/useStore';
 import { API_BASE_URL } from '../lib/api';
-import { Layers, Compass, Loader2 } from 'lucide-react';
+import { Layers, Loader2, Search, MapPin, Filter } from 'lucide-react';
 import { forceCollide } from 'd3-force';
 import LearningRoadmapOverlay from './LearningRoadmapOverlay';
 
@@ -91,6 +91,9 @@ export default function GraphCanvas() {
   const [isOverlayOpen, setIsOverlayOpen] = useState(false);
   const [roadmapData, setRoadmapData] = useState<any[]>([]);
   const [roadmapLoading, setRoadmapLoading] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [edgeTypeFilter, setEdgeTypeFilter] = useState<string | null>(null);
+  const [showMiniMap, setShowMiniMap] = useState(true);
 
   // Store state
   const nodes = useStore((state) => state.nodes);
@@ -136,11 +139,16 @@ export default function GraphCanvas() {
     const nodeIds = new Set(filteredNodes.map(n => n.id));
     return safeEdges.filter(e => {
       if (!e) return false;
+      if (edgeTypeFilter && (e.type || 'RELATED_TO') !== edgeTypeFilter) return false;
       const fromId = typeof e.source === 'object' && e.source !== null ? (e.source as any).id : e.source || e.from;
       const toId = typeof e.target === 'object' && e.target !== null ? (e.target as any).id : e.target || e.to;
       return nodeIds.has(fromId) && nodeIds.has(toId);
     });
-  }, [safeEdges, filteredNodes]);
+  }, [safeEdges, filteredNodes, edgeTypeFilter]);
+
+  const edgeTypes = React.useMemo(() => {
+    return Array.from(new Set(safeEdges.map(e => e?.type || 'RELATED_TO').filter(Boolean))).sort();
+  }, [safeEdges]);
 
   const validatedGraphData = React.useMemo(() => {
     // 1. Validate and clean nodes
@@ -364,6 +372,53 @@ export default function GraphCanvas() {
     return degrees;
   }, [validatedGraphData]);
 
+  const jumpToNode = (node: GraphNode) => {
+    setSelectedNode(node);
+    try {
+      const fg = fgRef.current;
+      const graphData = fg?.graphData?.();
+      const renderedNode = graphData?.nodes?.find((n: any) => n.id === node.id) || node;
+      const x = typeof renderedNode.x === 'number' ? renderedNode.x : (node.x || node.fx || 0);
+      const y = typeof renderedNode.y === 'number' ? renderedNode.y : (node.y || node.fy || 0);
+      fg?.centerAt?.(x, y, 700);
+      fg?.zoom?.(2.8, 700);
+    } catch (err) {
+      console.error('Failed to jump to node:', err);
+    }
+  };
+
+  const handleSearchSubmit = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return;
+    const match = validatedGraphData.nodes.find(n =>
+      (n.name || '').toLowerCase().includes(term) ||
+      (n.label || '').toLowerCase().includes(term)
+    );
+    if (match) jumpToNode(match as GraphNode);
+  };
+
+  const minimapNodes = React.useMemo(() => {
+    const positioned = validatedGraphData.nodes
+      .map((node: any) => ({
+        node,
+        x: typeof node.x === 'number' ? node.x : (typeof node.fx === 'number' ? node.fx : 0),
+        y: typeof node.y === 'number' ? node.y : (typeof node.fy === 'number' ? node.fy : 0),
+      }));
+    if (!positioned.length) return [];
+    const minX = Math.min(...positioned.map(p => p.x));
+    const maxX = Math.max(...positioned.map(p => p.x));
+    const minY = Math.min(...positioned.map(p => p.y));
+    const maxY = Math.max(...positioned.map(p => p.y));
+    const width = Math.max(1, maxX - minX);
+    const height = Math.max(1, maxY - minY);
+    return positioned.map(p => ({
+      node: p.node,
+      x: 10 + ((p.x - minX) / width) * 140,
+      y: 10 + ((p.y - minY) / height) * 90,
+    }));
+  }, [validatedGraphData.nodes]);
+
   // Configure forces inside the force-directed simulation safely
   useEffect(() => {
     if (fgRef.current) {
@@ -437,6 +492,25 @@ export default function GraphCanvas() {
     }
   };
 
+  const getLinkColor = (type: string, isActivePath = false) => {
+    if (isActivePath) return '#10b981';
+    switch (type) {
+      case 'PREREQUISITE_OF':
+      case 'PREREQUISITE':
+        return 'rgba(34, 211, 238, 0.82)';
+      case 'EXTENDS':
+      case 'USED_FOR':
+        return 'rgba(16, 185, 129, 0.74)';
+      case 'CITES':
+      case 'MENTIONS':
+        return 'rgba(168, 85, 247, 0.68)';
+      case 'HAS_KEYWORD':
+        return 'rgba(20, 184, 166, 0.58)';
+      default:
+        return 'rgba(148, 163, 184, 0.48)';
+    }
+  };
+
   const handleNodeClick = async (node: any) => {
     if (!node || !node.id) return;
     const clickedNode: GraphNode = {
@@ -502,9 +576,62 @@ export default function GraphCanvas() {
       <div className="ambient-glow-cyan top-1/4 left-1/4 animate-pulse duration-[8000ms] opacity-50" />
       <div className="ambient-glow-violet bottom-1/3 right-1/3 animate-pulse duration-[12000ms] opacity-40" />
 
+      {/* Search / filters */}
+      {safeNodes.length > 0 && (
+        <div className="absolute top-4 left-4 z-30 flex flex-col gap-2 w-[min(360px,calc(100%-2rem))] pointer-events-auto">
+          <form
+            onSubmit={handleSearchSubmit}
+            className="flex items-center gap-2 bg-[#031412]/95 backdrop-blur-lg border border-cyan-500/25 px-2.5 py-2 rounded-xl shadow-[0_0_18px_rgba(6,182,212,0.10)]"
+          >
+            <Search className="w-4 h-4 text-cyan-300 shrink-0" />
+            <input
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              list="mindmesh-node-search"
+              placeholder="Search node, concept, paper..."
+              className="min-w-0 flex-1 bg-transparent outline-none text-xs text-cyan-50 placeholder:text-slate-500 font-medium"
+            />
+            <datalist id="mindmesh-node-search">
+              {validatedGraphData.nodes.slice(0, 160).map((node) => (
+                <option key={node.id} value={node.name} />
+              ))}
+            </datalist>
+            <button
+              type="submit"
+              className="px-2.5 py-1 rounded-lg bg-cyan-500/15 border border-cyan-400/30 text-[10px] font-bold uppercase tracking-wider text-cyan-100 hover:bg-cyan-500/25"
+            >
+              Jump
+            </button>
+          </form>
+
+          <div className="flex flex-wrap items-center gap-1.5 bg-[#031412]/90 backdrop-blur-lg border border-cyan-500/15 px-2 py-2 rounded-xl">
+            <span className="flex items-center gap-1 px-1 text-[9px] font-mono font-bold uppercase tracking-widest text-cyan-400/70">
+              <Filter className="w-3.5 h-3.5" /> Edges
+            </span>
+            <button
+              onClick={() => setEdgeTypeFilter(null)}
+              data-active={!edgeTypeFilter}
+              className="px-2 py-1 rounded-md border border-slate-600/30 text-[9px] font-bold uppercase tracking-wider text-slate-300 data-[active=true]:border-cyan-400/60 data-[active=true]:text-cyan-100 data-[active=true]:bg-cyan-500/15"
+            >
+              All
+            </button>
+            {edgeTypes.slice(0, 7).map((type) => (
+              <button
+                key={type}
+                onClick={() => setEdgeTypeFilter(edgeTypeFilter === type ? null : type)}
+                data-active={edgeTypeFilter === type}
+                className="px-2 py-1 rounded-md border border-slate-600/30 text-[9px] font-bold uppercase tracking-wider text-slate-300 data-[active=true]:border-cyan-400/60 data-[active=true]:text-cyan-100 data-[active=true]:bg-cyan-500/15"
+              >
+                {type.replaceAll('_', ' ')}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Map / Path View switch */}
       {selectedNodeId && (
-        <div className="absolute top-4 left-4 z-20 flex items-center gap-2 bg-[#031412]/95 backdrop-blur-lg border border-cyan-500/20 px-2 py-2 rounded-xl shadow-[0_0_18px_rgba(6,182,212,0.08)]">
+        <div className="absolute top-4 right-4 z-20 flex items-center gap-2 bg-[#031412]/95 backdrop-blur-lg border border-cyan-500/20 px-2 py-2 rounded-xl shadow-[0_0_18px_rgba(6,182,212,0.08)]">
           <button
             onClick={() => setGraphMode('advanced')}
             data-active={graphMode !== 'path'}
@@ -532,7 +659,7 @@ export default function GraphCanvas() {
 
       {/* Loading Overlay */}
       {loading && (
-        <div className="absolute top-4 right-4 z-10 flex items-center gap-2 bg-[#031412]/95 backdrop-blur-lg border border-cyan-500/15 px-3.5 py-2 rounded-xl shadow-[0_0_15px_rgba(6,182,212,0.06)]">
+        <div className="absolute top-20 right-4 z-10 flex items-center gap-2 bg-[#031412]/95 backdrop-blur-lg border border-cyan-500/15 px-3.5 py-2 rounded-xl shadow-[0_0_15px_rgba(6,182,212,0.06)]">
           <Loader2 className="w-4 h-4 text-cyan-400 animate-spin" />
           <span className="text-xs font-medium text-cyan-300">Expanding path...</span>
         </div>
@@ -612,16 +739,18 @@ export default function GraphCanvas() {
             }}
             linkColor={(link: any) => {
               try {
-                return isPathLink(link) ? '#1f7a59' : 'rgba(23, 42, 46, 0.5)';
+                return getLinkColor(link?.type || 'RELATED_TO', isPathLink(link));
               } catch (err) {
-                return 'rgba(23, 42, 46, 0.5)';
+                return 'rgba(148, 163, 184, 0.48)';
               }
             }}
             linkWidth={(link: any) => {
               try {
-                return isPathLink(link) ? 3 : 1.5;
+                if (isPathLink(link)) return 3.5;
+                const type = link?.type || 'RELATED_TO';
+                return type === 'PREREQUISITE_OF' || type === 'PREREQUISITE' ? 2.4 : 1.8;
               } catch (err) {
-                return 1.5;
+                return 1.8;
               }
             }}
             linkCurvature={0.25}
@@ -678,7 +807,7 @@ export default function GraphCanvas() {
                 
                 // Fixed font size between 10-14px that scales properly with zoom
                 const scale = typeof globalScale === 'number' && !isNaN(globalScale) && globalScale > 0 ? globalScale : 1;
-                const fontSize = Math.max(5, 15 / scale);
+                const fontSize = Math.max(7, 17 / scale);
                 const rawDegree = (nodeDegrees && node.id) ? (nodeDegrees[node.id] || 0) : 0;
                 const degree = typeof rawDegree === 'number' && !isNaN(rawDegree) && rawDegree >= 0 ? rawDegree : 0;
                 const radius = 3 + Math.sqrt(degree) * 1.5;
@@ -823,6 +952,66 @@ export default function GraphCanvas() {
             }}
           />
         </GraphErrorBoundary>
+      )}
+
+      {safeNodes.length > 0 && (
+        <div className="absolute bottom-4 right-4 z-20 w-[180px] rounded-xl bg-[#031412]/92 backdrop-blur-lg border border-cyan-500/20 shadow-[0_0_18px_rgba(6,182,212,0.08)] overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-cyan-500/10">
+            <span className="flex items-center gap-1.5 text-[9px] font-mono font-bold uppercase tracking-widest text-cyan-300/80">
+              <MapPin className="w-3.5 h-3.5" /> Minimap
+            </span>
+            <button
+              onClick={() => setShowMiniMap(!showMiniMap)}
+              className="text-[9px] font-bold uppercase tracking-wider text-slate-400 hover:text-cyan-300"
+            >
+              {showMiniMap ? 'Hide' : 'Show'}
+            </button>
+          </div>
+          {showMiniMap && (
+            <>
+              <svg viewBox="0 0 160 110" className="w-full h-[120px] bg-[#010807]/70">
+                {validatedGraphData.links.slice(0, 240).map((link: any, idx: number) => {
+                  const fromId = typeof link.source === 'object' ? link.source?.id : link.source;
+                  const toId = typeof link.target === 'object' ? link.target?.id : link.target;
+                  const a = minimapNodes.find(p => p.node.id === fromId);
+                  const b = minimapNodes.find(p => p.node.id === toId);
+                  if (!a || !b) return null;
+                  return (
+                    <line
+                      key={`${fromId}-${toId}-${idx}`}
+                      x1={a.x}
+                      y1={a.y}
+                      x2={b.x}
+                      y2={b.y}
+                      stroke={getLinkColor(link.type)}
+                      strokeWidth="0.8"
+                      opacity="0.55"
+                    />
+                  );
+                })}
+                {minimapNodes.slice(0, 180).map(({ node, x, y }) => (
+                  <circle
+                    key={node.id}
+                    cx={x}
+                    cy={y}
+                    r={selectedNode?.id === node.id ? 3.4 : 2.2}
+                    fill={getNodeColor(node.label)}
+                    stroke={selectedNode?.id === node.id ? '#ffffff' : 'transparent'}
+                    strokeWidth="1"
+                    className="cursor-pointer"
+                    onClick={() => jumpToNode(node as GraphNode)}
+                  />
+                ))}
+              </svg>
+              <div className="grid grid-cols-2 gap-1 px-3 pb-2 text-[8px] font-mono uppercase tracking-wider text-slate-400">
+                <span><i className="inline-block w-2 h-2 rounded-full bg-cyan-400 mr-1" />Concept</span>
+                <span><i className="inline-block w-2 h-2 rounded-full bg-amber-500 mr-1" />Topic</span>
+                <span><i className="inline-block w-2 h-2 rounded-full bg-violet-500 mr-1" />Paper</span>
+                <span><i className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1" />Method</span>
+              </div>
+            </>
+          )}
+        </div>
       )}
 
       {/* HUD Info */}
