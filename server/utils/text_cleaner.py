@@ -1,4 +1,5 @@
 import io
+import os
 import re
 import unicodedata
 from collections import Counter
@@ -14,6 +15,110 @@ def clean_pdf_text_from_bytes(file_bytes: bytes) -> tuple[str, list[str]]:
     for page in reader.pages:
         raw_pages.append(page.extract_text() or "")
     return clean_raw_pages(raw_pages)
+
+
+def extract_pdf_text_with_metadata(file_bytes: bytes) -> tuple[str, list[str], dict]:
+    """
+    Extract PDF text with a scanned-PDF OCR fallback.
+    OCR is optional at runtime: if the required binary/deps are missing, metadata
+    explains the failure so ingestion can surface a clear status instead of hanging.
+    """
+    reader = PdfReader(io.BytesIO(file_bytes))
+    raw_pages = [(page.extract_text() or "") for page in reader.pages]
+    text, cleaned_pages = clean_raw_pages(raw_pages)
+    native_word_count = len(re.findall(r"\b\w+\b", text))
+    metadata = {
+        "ocr_used": False,
+        "ocr_confidence": None,
+        "ocr_error": None,
+        "native_word_count": native_word_count,
+        "page_count": len(raw_pages),
+    }
+    if native_word_count >= 40 or len(text.strip()) >= 250:
+        return text, cleaned_pages, metadata
+
+    try:
+        ocr_pages, confidence = _ocr_pdf_pages(file_bytes)
+        ocr_text, ocr_cleaned_pages = clean_raw_pages(ocr_pages)
+        metadata.update({
+            "ocr_used": True,
+            "ocr_confidence": confidence,
+            "ocr_word_count": len(re.findall(r"\b\w+\b", ocr_text)),
+        })
+        return ocr_text, ocr_cleaned_pages, metadata
+    except Exception as e:
+        metadata["ocr_error"] = str(e)
+        return text, cleaned_pages, metadata
+
+
+def _ocr_pdf_pages(file_bytes: bytes) -> tuple[list[str], float | None]:
+    """Render pages with PyMuPDF and OCR with RapidOCR or pytesseract."""
+    try:
+        import fitz  # PyMuPDF
+    except Exception as e:
+        raise RuntimeError(f"OCR PDF renderer unavailable: {e}") from e
+
+    rapid_engine = None
+    tesseract = None
+    tesseract_output = None
+    ocr_import_errors: list[str] = []
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+        rapid_engine = RapidOCR()
+    except Exception as e:
+        ocr_import_errors.append(f"RapidOCR unavailable: {e}")
+    if rapid_engine is None:
+        try:
+            import pytesseract
+            from pytesseract import Output
+            tesseract = pytesseract
+            tesseract_output = Output
+        except Exception as e:
+            ocr_import_errors.append(f"Tesseract unavailable: {e}")
+    if rapid_engine is None and tesseract is None:
+        raise RuntimeError("; ".join(ocr_import_errors) or "No OCR engine available.")
+
+    max_pages = int(os.getenv("OCR_MAX_PAGES", "25"))
+    zoom = float(os.getenv("OCR_RENDER_ZOOM", "2.0"))
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    ocr_pages: list[str] = []
+    confidences: list[float] = []
+
+    for page_index in range(min(len(doc), max_pages)):
+        page = doc.load_page(page_index)
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        image = pix.pil_image()
+        if rapid_engine is not None:
+            import numpy as np
+            result, _ = rapid_engine(np.array(image))
+            page_lines = []
+            for item in result or []:
+                if len(item) >= 3:
+                    page_lines.append(str(item[1]))
+                    try:
+                        confidences.append(float(item[2]) * 100)
+                    except Exception:
+                        pass
+            ocr_pages.append("\n".join(page_lines))
+        else:
+            page_text = tesseract.image_to_string(image)
+            ocr_pages.append(page_text or "")
+            try:
+                data = tesseract.image_to_data(image, output_type=tesseract_output.DICT)
+                for raw_conf in data.get("conf", []):
+                    try:
+                        conf = float(raw_conf)
+                        if conf >= 0:
+                            confidences.append(conf)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+    if len(doc) > max_pages:
+        ocr_pages.append(f"\n[OCR limited to first {max_pages} of {len(doc)} pages.]\n")
+    avg_conf = round(sum(confidences) / len(confidences), 2) if confidences else None
+    return ocr_pages, avg_conf
 
 def stream_clean_pdf_text_from_bytes(file_bytes: bytes, chunk_size: int = 10):
     """

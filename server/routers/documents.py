@@ -15,7 +15,7 @@ from server.utils.vercel_blob_client import vercel_blob_client
 from server.utils.llm_client import llm_client, calculate_entity_quality, singularize_concept_name, normalize_and_clean_concept_name, GENERIC_BLACKLIST
 from server.utils.embedding_client import embedding_client, cosine_similarity
 from server.utils.sequence_parser import parse_learning_sequences
-from server.utils.text_cleaner import clean_pdf_text_from_bytes
+from server.utils.text_cleaner import clean_pdf_text_from_bytes, extract_pdf_text_with_metadata
 from server.config import config
 import re
 
@@ -102,6 +102,8 @@ def _save_doc_status(
     failed_chunks: Optional[int] = None,
     total_chunks: Optional[int] = None,
     extraction_mode: Optional[str] = None,
+    ocr_used: Optional[bool] = None,
+    ocr_confidence: Optional[float] = None,
 ) -> None:
     previous = extraction_status_cache.get(doc_id) or _load_json_state("doc-status", doc_id) or {}
     payload = {
@@ -113,6 +115,8 @@ def _save_doc_status(
         "failed_chunks": failed_chunks if failed_chunks is not None else previous.get("failed_chunks", 0),
         "total_chunks": total_chunks if total_chunks is not None else previous.get("total_chunks", 0),
         "extraction_mode": extraction_mode or previous.get("extraction_mode"),
+        "ocr_used": ocr_used if ocr_used is not None else previous.get("ocr_used", False),
+        "ocr_confidence": ocr_confidence if ocr_confidence is not None else previous.get("ocr_confidence"),
     }
     extraction_status_cache[doc_id] = {
         "status": payload["status"],
@@ -121,6 +125,8 @@ def _save_doc_status(
         "failed_chunks": payload["failed_chunks"],
         "total_chunks": payload["total_chunks"],
         "extraction_mode": payload["extraction_mode"],
+        "ocr_used": payload["ocr_used"],
+        "ocr_confidence": payload["ocr_confidence"],
     }
     _save_json_state("doc-status", doc_id, payload)
 
@@ -227,6 +233,8 @@ class StatusResponse(BaseModel):
     failed_chunks: int = 0
     total_chunks: int = 0
     extraction_mode: str | None = None
+    ocr_used: bool = False
+    ocr_confidence: float | None = None
 
 def is_acronym_of(a: str, p: str) -> bool:
     a_clean = re.sub(r'[^a-zA-Z]', '', a).upper()
@@ -551,16 +559,28 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
 def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, session_id: str):
     failed_chunks = 0
     total_chunks = 0
+    text_meta = {"ocr_used": False, "ocr_confidence": None}
     _save_doc_status(doc_id, "processing", 10, None, session_id)
     
     try:
-        # 1. Parse and clean PDF text
-        text, _ = clean_pdf_text_from_bytes(file_bytes)
+        # 1. Parse and clean PDF text; fall back to OCR for scanned PDFs.
+        text, _, text_meta = extract_pdf_text_with_metadata(file_bytes)
         
         if not text:
-            raise ValueError("This looks like a scanned PDF — text extraction isn't supported yet.")
+            ocr_error = text_meta.get("ocr_error")
+            if ocr_error:
+                raise ValueError(f"This looks like a scanned PDF, but OCR could not run: {ocr_error}")
+            raise ValueError("This PDF has no extractable text.")
             
-        _save_doc_status(doc_id, "processing", 30, None, session_id)
+        _save_doc_status(
+            doc_id,
+            "processing",
+            30,
+            None,
+            session_id,
+            ocr_used=bool(text_meta.get("ocr_used")),
+            ocr_confidence=text_meta.get("ocr_confidence"),
+        )
         
         # Identify main topic of the document
         main_topic_info = llm_client.identify_main_topic(text[:15000], filename)
@@ -1376,6 +1396,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             failed_chunks=failed_chunks,
             total_chunks=total_chunks,
             extraction_mode="full_document_chunked",
+            ocr_used=bool(text_meta.get("ocr_used")),
+            ocr_confidence=text_meta.get("ocr_confidence"),
         )
         _save_session_doc(session_id, {
             "id": doc_id,
@@ -1392,9 +1414,17 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 d.progress_pct = 100,
                 d.failed_chunks = $failed_chunks,
                 d.total_chunks = $total_chunks,
-                d.extraction_mode = 'full_document_chunked'
+                d.extraction_mode = 'full_document_chunked',
+                d.ocr_used = $ocr_used,
+                d.ocr_confidence = $ocr_confidence
             """,
-            {"doc_id": doc_id, "failed_chunks": failed_chunks, "total_chunks": total_chunks}
+            {
+                "doc_id": doc_id,
+                "failed_chunks": failed_chunks,
+                "total_chunks": total_chunks,
+                "ocr_used": bool(text_meta.get("ocr_used")),
+                "ocr_confidence": text_meta.get("ocr_confidence"),
+            }
         )
         logger.info(f"Extraction pipeline completed successfully for document {doc_id}.")
         
@@ -1411,6 +1441,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             failed_chunks=failed_chunks,
             total_chunks=total_chunks,
             extraction_mode="full_document_chunked",
+            ocr_used=bool(text_meta.get("ocr_used")),
+            ocr_confidence=text_meta.get("ocr_confidence"),
         )
         _save_session_doc(session_id, {
             "id": doc_id,
@@ -1444,9 +1476,18 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 d.error_msg = $error,
                 d.failed_chunks = $failed_chunks,
                 d.total_chunks = $total_chunks,
-                d.extraction_mode = 'full_document_chunked'
+                d.extraction_mode = 'full_document_chunked',
+                d.ocr_used = $ocr_used,
+                d.ocr_confidence = $ocr_confidence
             """,
-            {"doc_id": doc_id, "error": error_msg, "failed_chunks": failed_chunks, "total_chunks": total_chunks}
+            {
+                "doc_id": doc_id,
+                "error": error_msg,
+                "failed_chunks": failed_chunks,
+                "total_chunks": total_chunks,
+                "ocr_used": bool(text_meta.get("ocr_used")),
+                "ocr_confidence": text_meta.get("ocr_confidence"),
+            }
         )
 def delete_document_internal(doc_id: str, session_id: Optional[str] = None):
     import os
@@ -1592,7 +1633,7 @@ def _process_file_upload(
         ON CREATE SET d.title = $title, d.type = 'pdf', d.upload_date = $upload_date, 
                       d.storage_url = $storage_url, d.status = 'processing', d.progress_pct = 10,
                       d.session_id = $session_id, d.failed_chunks = 0, d.total_chunks = 0,
-                      d.extraction_mode = 'full_document_chunked'
+                      d.extraction_mode = 'full_document_chunked', d.ocr_used = false
         RETURN d
         """
         neo4j_client.run_query(query, {
@@ -1830,7 +1871,9 @@ def get_document_status(id: str, session_id: Optional[str] = Query(None)):
             error=persisted_status.get("error"),
             failed_chunks=persisted_status.get("failed_chunks") or 0,
             total_chunks=persisted_status.get("total_chunks") or 0,
-            extraction_mode=persisted_status.get("extraction_mode")
+            extraction_mode=persisted_status.get("extraction_mode"),
+            ocr_used=bool(persisted_status.get("ocr_used")),
+            ocr_confidence=persisted_status.get("ocr_confidence"),
         )
         
     # Check database next
@@ -1841,7 +1884,9 @@ def get_document_status(id: str, session_id: Optional[str] = Query(None)):
            d.error_msg as error_msg,
            d.failed_chunks as failed_chunks,
            d.total_chunks as total_chunks,
-           d.extraction_mode as extraction_mode
+           d.extraction_mode as extraction_mode,
+           d.ocr_used as ocr_used,
+           d.ocr_confidence as ocr_confidence
     """
     res = neo4j_client.run_query(query, {"id": id})
     if res:
@@ -1852,7 +1897,9 @@ def get_document_status(id: str, session_id: Optional[str] = Query(None)):
             error=record.get("error_msg"),
             failed_chunks=record.get("failed_chunks") or 0,
             total_chunks=record.get("total_chunks") or 0,
-            extraction_mode=record.get("extraction_mode")
+            extraction_mode=record.get("extraction_mode"),
+            ocr_used=bool(record.get("ocr_used")),
+            ocr_confidence=record.get("ocr_confidence"),
         )
         
     raise HTTPException(status_code=404, detail="Document not found.")
