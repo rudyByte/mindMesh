@@ -421,6 +421,19 @@ class LLMClient:
 
         raise RuntimeError("No LLM provider available.")
 
+    def complete_text(self, system_prompt: str, user_prompt: str, max_tokens: int = 1000, temperature: float = 0, prefer_anthropic: bool = True) -> str:
+        """Public provider-neutral completion helper for routers.
+
+        Uses Anthropic first when configured, then Groq/OpenAI-compatible fallback.
+        """
+        return self._complete_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            prefer_anthropic=prefer_anthropic,
+        )
+
     @staticmethod
     def _strip_json_fences(content: str) -> str:
         content = content.strip()

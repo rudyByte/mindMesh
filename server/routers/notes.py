@@ -8,7 +8,6 @@ from pydantic import BaseModel
 
 from server.utils.neo4j_client import neo4j_client
 from server.utils.llm_client import llm_client
-from server.config import config
 
 router = APIRouter()
 logger = logging.getLogger("notes_router")
@@ -38,9 +37,8 @@ def run_concept_linking_for_note(note_id: str, content: str, session_id: str):
     elif "transformer" in content_lower and not any("transformer" in c["name"].lower() for c in concepts):
         new_concept = "Transformers"
 
-    # 2. Real LLM execution (Groq)
-    use_live = bool(config.GROQ_API_KEY) and "mock-api-key" not in config.GROQ_API_KEY
-    if use_live and llm_client._client:
+    # 2. Real LLM execution through configured provider
+    if not llm_client._is_mock:
         try:
             concept_list_str = ", ".join([f"{c['name']} (ID: {c['id']})" for c in concepts])
             prompt = (
@@ -52,14 +50,13 @@ def run_concept_linking_for_note(note_id: str, content: str, session_id: str):
                 f"Return ONLY valid JSON matching this schema:\n"
                 f"{{\"matched_ids\": [\"id1\", \"id2\"], \"new_concept\": null | \"concept_name\"}}"
             )
-            
-            res = llm_client._client.chat.completions.create(
-                model=config.GROQ_MODEL,
+            content_res = llm_client.complete_text(
+                system_prompt="You link notes to graph concepts. Return only valid JSON.",
+                user_prompt=prompt,
                 max_tokens=1000,
                 temperature=0,
-                messages=[{"role": "user", "content": prompt}]
+                prefer_anthropic=True,
             )
-            content_res = res.choices[0].message.content.strip()
             
             # Clean markdown formatting fences
             if content_res.startswith("```json"): content_res = content_res[7:]

@@ -5,14 +5,9 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-try:
-    from openai import AsyncOpenAI
-except Exception:
-    AsyncOpenAI = None
 
 from server.utils.neo4j_client import neo4j_client
 from server.utils.llm_client import llm_client
-from server.config import config
 
 router = APIRouter()
 logger = logging.getLogger("copilot_router")
@@ -289,27 +284,28 @@ async def generate_live_stream(message: str, context: dict, history: list, user_
     )
 
     try:
-        if AsyncOpenAI is None:
-            raise RuntimeError("OpenAI SDK not installed in this runtime.")
-        # Groq async streaming client (OpenAI-compatible)
-        aclient = AsyncOpenAI(api_key=config.GROQ_API_KEY, base_url=config.GROQ_BASE_URL)
-        messages_payload = []
-        if system_prompt:
-            messages_payload.append({"role": "system", "content": system_prompt})
+        history_text = ""
         for h in history:
-            messages_payload.append({"role": h.role, "content": h.content})
-        messages_payload.append({"role": "user", "content": message})
+            role = getattr(h, "role", "user")
+            content = getattr(h, "content", "")
+            if content:
+                history_text += f"{role}: {content}\n"
 
-        stream = await aclient.chat.completions.create(
-            model=config.GROQ_MODEL,
+        user_prompt = (
+            f"User role: {user_role}\n"
+            f"Conversation history:\n{history_text or '(none)'}\n"
+            f"Current user message:\n{message}"
+        )
+        response = llm_client.complete_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             max_tokens=2000,
             temperature=0.2,
-            messages=messages_payload,
-            stream=True
+            prefer_anthropic=True,
         )
-        async for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+        for chunk in re.findall(r'\S+|\s+', response):
+            yield chunk
+            await asyncio.sleep(0.003)
     except Exception as e:
         logger.error(f"Error during live Copilot stream: {e}")
         # Fallback to simulated message if API fails
@@ -324,8 +320,8 @@ async def chat_copilot(request: ChatRequest):
     if request.node_id:
         context = get_node_graphrag_context(request.node_id, request.session_id, request.document_id)
         
-    # Use live mode if Groq key is available, otherwise fall back to mock streaming
-    use_live = bool(config.GROQ_API_KEY) and "mock-api-key" not in config.GROQ_API_KEY
+    # Use live mode when any real provider was configured; failed calls fall back safely.
+    use_live = not llm_client._is_mock
     
     if not use_live:
         return StreamingResponse(
