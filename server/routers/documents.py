@@ -756,9 +756,15 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         use_serverless_local_extraction = bool(
             os.getenv("VERCEL") and getattr(config, "SERVERLESS_LOCAL_EXTRACTION", True)
         )
+        allow_serverless_llm_for_small_doc = bool(
+            use_serverless_local_extraction
+            and total_chunks <= 2
+            and len(text) <= 12000
+            and not getattr(llm_client, "_is_mock", False)
+        )
 
         def extract_one_chunk(chunk_index: int, chunk_text: str) -> tuple[list, list, bool]:
-            if use_serverless_local_extraction:
+            if use_serverless_local_extraction and not allow_serverless_llm_for_small_doc:
                 result = _build_dynamic_fallback_graph(
                     chunk_text,
                     f"{filename} chunk {chunk_index + 1}",
