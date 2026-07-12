@@ -1,7 +1,11 @@
 import os
 import logging
-from supabase import create_client, Client
 from server.config import config
+
+try:
+    from supabase import create_client
+except Exception:  # Supabase is optional in Vercel Blob deployments.
+    create_client = None
 
 logger = logging.getLogger("supabase_client")
 
@@ -10,6 +14,11 @@ class SupabaseClientWrapper:
         self._client = None
         self._is_mock = False
         
+        if create_client is None:
+            logger.warning("Supabase package unavailable. Starting Supabase in mock mode.")
+            self._is_mock = True
+            return
+
         if "mock.supabase.co" in config.SUPABASE_URL or "mock-anon" in config.SUPABASE_KEY:
             logger.warning("Default/mock Supabase credentials detected. Starting Supabase in mock mode.")
             self._is_mock = True

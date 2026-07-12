@@ -2,10 +2,10 @@ fastapi==0.138.0
 neo4j==5.21.0
 openai
 python-dotenv==1.0.1
-supabase==2.5.1
 pydantic==2.13.4
 python-multipart==0.0.9
 pypdf==4.2.0
 PyMuPDF==1.26.6
 pillow==12.0.0
 rapidocr-onnxruntime
+opencv-python-headless==4.12.0.88
