@@ -21,6 +21,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
   const [extractionNotice, setExtractionNotice] = useState('');
+  const [ocrNotice, setOcrNotice] = useState('');
   const [fileName, setFileName] = useState('');
   
   const addDocument = useStore((state) => state.addDocument);
@@ -49,6 +50,8 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
         setUploadState('idle');
         setProgress(0);
         setErrorMsg('');
+        setExtractionNotice('');
+        setOcrNotice('');
         setFileName('');
       }
     }
@@ -200,6 +203,9 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
     setFileName(file.name);
     setUploadState('uploading');
     setProgress(5);
+    setErrorMsg('');
+    setExtractionNotice('');
+    setOcrNotice('');
 
     try {
       // Always use chunked upload in production-safe mode. Full-file multipart
@@ -238,13 +244,30 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
         }
         
         const data = await response.json();
-        const { status, progress_pct, error, fallback_chunks, total_chunks, extraction_mode } = data;
+        const {
+          status,
+          progress_pct,
+          error,
+          fallback_chunks,
+          total_chunks,
+          extraction_mode,
+          ocr_used,
+          ocr_confidence,
+          ocr_error
+        } = data;
         if (fallback_chunks > 0) {
           setExtractionNotice(
             extraction_mode === 'keyword_fallback'
-              ? `Basic keyword extraction used for ${fallback_chunks}/${total_chunks || fallback_chunks} chunks because AI extraction was unavailable.`
+              ? `Basic document-local extraction used for ${fallback_chunks}/${total_chunks || fallback_chunks} chunks because live AI extraction was unavailable.`
               : `Hybrid extraction: ${fallback_chunks}/${total_chunks || fallback_chunks} chunks used local fallback.`
           );
+        }
+        if (ocr_used) {
+          setOcrNotice(
+            `OCR scan mode used${typeof ocr_confidence === 'number' ? ` · confidence ${Math.round(ocr_confidence)}%` : ''}.`
+          );
+        } else if (ocr_error) {
+          setOcrNotice(`OCR unavailable for scanned pages: ${ocr_error}`);
         }
         
         setProgress(progress_pct);
@@ -410,6 +433,11 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
                 {extractionNotice && (
                   <p className="text-[10px] text-amber-300 bg-amber-950/20 border border-amber-500/15 rounded-md px-2 py-1 font-sans">
                     {extractionNotice}
+                  </p>
+                )}
+                {ocrNotice && (
+                  <p className="text-[10px] text-cyan-200 bg-cyan-950/20 border border-cyan-500/15 rounded-md px-2 py-1 font-sans">
+                    {ocrNotice}
                   </p>
                 )}
               </div>

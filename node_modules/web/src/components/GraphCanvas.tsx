@@ -201,95 +201,45 @@ export default function GraphCanvas() {
     return { nodes: validNodes, links: validLinks };
   }, [filteredNodes, filteredEdges]);
 
-  // ── Preserve Simulated Positions & Calculate DAG Levels ──────────────────
-  // We use an iterative DAG levelling algorithm to assign topological depths.
-  // Topics sit at level 0, concept nodes with no prereqs at level 1, concepts
-  // with prerequisites are pushed to levels 2, 3, etc. based on longest path.
+  // ── Organic Node Seeding — Golden-Angle Spiral ───────────────────────────
+  // Seed initial positions using a golden-angle spiral so nodes start
+  // spread in a circular pattern rather than collapsed at the origin.
+  // D3 forces then freely reorganise them into an organic cluster network.
+  // NO fx/fy locks are applied here — only the selected focus node is pinned.
   if (filteredNodes !== prevFilteredNodesRef.current || filteredEdges !== prevFilteredEdgesRef.current) {
     prevFilteredNodesRef.current = filteredNodes;
     prevFilteredEdgesRef.current = filteredEdges;
 
-    const levels: Record<string, number> = {};
-    filteredNodes.forEach(n => {
-      if (n.label === 'Topic') levels[n.id] = 0;
-      else if (n.label === 'Concept') levels[n.id] = 1;
-      else if (n.label === 'Paper' || n.label === 'Method' || n.label === 'Dataset') levels[n.id] = 2;
-      else levels[n.id] = 3;
-    });
+    const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5)); // ~137.5°
+    const BASE_RADIUS  = 60;
 
-    // Relax levels iteratively based on directed relationship directions
-    for (let iter = 0; iter < 12; iter++) {
-      let changed = false;
-      filteredEdges.forEach(l => {
-        const fromId = typeof l.source === 'object' && l.source !== null ? (l.source as any).id : l.source || l.from;
-        const toId = typeof l.target === 'object' && l.target !== null ? (l.target as any).id : l.target || l.to;
-        if (!fromId || !toId || levels[fromId] === undefined || levels[toId] === undefined) return;
+    d3NodesRef.current = filteredNodes.map((n, idx) => {
+      const angle  = idx * GOLDEN_ANGLE;
+      const radius = BASE_RADIUS + Math.sqrt(idx + 1) * 28;
+      const seedX  = Math.cos(angle) * radius;
+      const seedY  = Math.sin(angle) * radius;
 
-        // Prerequisite rules: prerequisite (from) is above target (to)
-        if (l.type === 'PREREQUISITE_OF' || l.type === 'PREREQUISITE') {
-          if (levels[toId] < levels[fromId] + 1) {
-            levels[toId] = levels[fromId] + 1;
-            changed = true;
-          }
-        }
-        // Extends rules: general concept (to) is above specific concept (from)
-        if (l.type === 'EXTENDS') {
-          if (levels[fromId] < levels[toId] + 1) {
-            levels[fromId] = levels[toId] + 1;
-            changed = true;
-          }
-        }
-        // Used_for rules: fundamental method (from) is above application (to)
-        if (l.type === 'USED_FOR') {
-          if (levels[toId] < levels[fromId] + 1) {
-            levels[toId] = levels[fromId] + 1;
-            changed = true;
-          }
-        }
-      });
-      if (!changed) break;
-    }
-
-    const maxLevel = Math.max(1, ...Object.values(levels));
-    const W = dimensions.width || 800;
-    const H = dimensions.height || 600;
-    const ySpan = H * 0.72;
-    const yStart = -ySpan / 2;
-    const yStep = ySpan / maxLevel;
-
-    // Group nodes by level to compute horizontal spacing
-    const levelGroups: Record<number, any[]> = {};
-    for (let l = 0; l <= maxLevel; l++) levelGroups[l] = [];
-    filteredNodes.forEach(n => {
-      const lvl = levels[n.id] ?? 1;
-      levelGroups[lvl].push(n);
-    });
-
-    // Populate stable ref nodes preserving existing simulated positions
-    d3NodesRef.current = filteredNodes.map(n => {
-      const lvl = levels[n.id] ?? 1;
-      const peers = levelGroups[lvl];
-      const idx = peers.indexOf(n);
-      const count = Math.max(1, peers.length);
-      const xRange = Math.min(W * 0.85, count * 150);
-      const x = count === 1 ? 0 : -xRange / 2 + (idx / (count - 1)) * xRange;
-      const y = yStart + lvl * yStep;
-
+      // Preserve coordinates already computed by D3 so the simulation is
+      // continuous across re-renders; only apply seed for brand-new nodes.
       const existing = d3NodesRef.current.find(prev => prev.id === n.id);
+
+      // Strip any fx/fy from the source data — no node should be locked
+      // except the focus node, which is handled in traversal mode below.
       return {
         ...n,
-        x: existing?.x ?? x,
-        y: existing?.y ?? y,
+        x:  existing?.x  ?? seedX,
+        y:  existing?.y  ?? seedY,
         vx: existing?.vx ?? 0,
         vy: existing?.vy ?? 0,
-        level: lvl
+        fx: undefined,
+        fy: undefined,
       };
     });
 
     // Populate stable ref links
     d3LinksRef.current = filteredEdges.map(e => {
       const fromId = typeof e.source === 'object' && e.source !== null ? (e.source as any).id : e.source || e.from;
-      const toId = typeof e.target === 'object' && e.target !== null ? (e.target as any).id : e.target || e.to;
+      const toId   = typeof e.target === 'object' && e.target !== null ? (e.target as any).id : e.target || e.to;
       return {
         source: fromId,
         target: toId,
@@ -332,16 +282,25 @@ export default function GraphCanvas() {
           const related = Array.isArray(data.related) ? data.related : [];
           const target = data.target;
 
-          const positionTier = (items: any[], y: number, xOffset = 0) => items.map((item, idx) => {
-            const count = Math.max(1, items.length);
-            const x = xOffset + (idx - (count - 1) / 2) * 180;
-            return { ...item, x, y, fx: x, fy: y };
-          });
+          // Seed nodes around a circle so D3 forces settle them organically.
+          // The ONLY pinned node is the selected focus (targetNode at center).
+          const seedAroundCenter = (items: any[], ringRadius: number, angleOffset = 0) =>
+            items.map((item, idx) => {
+              const angle = angleOffset + (idx / Math.max(1, items.length)) * Math.PI * 2;
+              return {
+                ...item,
+                x: Math.cos(angle) * ringRadius,
+                y: Math.sin(angle) * ringRadius,
+                fx: undefined,
+                fy: undefined,
+              };
+            });
 
-          const prereqNodes = positionTier(prereqs, -220, 0);
-          const extensionNodes = positionTier(extensions, 210, -120);
-          const appNodes = positionTier(applications, 340, 120);
-          const relatedNodes = positionTier(related, 20, 360);
+          const prereqNodes     = seedAroundCenter(prereqs,      180, 0);
+          const extensionNodes  = seedAroundCenter(extensions,   240, 0.8);
+          const appNodes        = seedAroundCenter(applications, 300, 1.6);
+          const relatedNodes    = seedAroundCenter(related,      360, 2.4);
+          // Pin only the focus node at canvas center
           const targetNode = target ? { ...target, x: 0, y: 0, fx: 0, fy: 0 } : null;
           const pathNodes = [...prereqNodes, ...(targetNode ? [targetNode] : []), ...extensionNodes, ...appNodes, ...relatedNodes];
           const pathEdges = [
@@ -522,84 +481,52 @@ export default function GraphCanvas() {
     }));
   }, [tick]);
 
-  // ── Hierarchical layout via D3 forces ────────────────────────────────────
+  // ── Organic Force-Directed Layout ────────────────────────────────────────
+  // NO row-locking. Pure organic: charge repulsion + link attraction + collision.
+  // Nodes settle into natural clusters based purely on their connections.
   useEffect(() => {
     if (!fgRef.current || !d3NodesRef.current.length) return;
     try {
       const fg = fgRef.current;
-      const canvasHeight = dimensions.height || 600;
-      const canvasWidth  = dimensions.width  || 800;
 
-      const maxLevel = Math.max(1, ...d3NodesRef.current.map(n => n.level ?? 1));
-      const ySpan  = canvasHeight * 0.76;
-      const yStart = -ySpan / 2;
-      const yStep  = ySpan / maxLevel;
-      const levelY  = (level: number) => yStart + level * yStep;
-
-      // Group node IDs by level for X distribution
-      const levelGroups: Record<number, string[]> = {};
-      for (let l = 0; l <= maxLevel; l++) levelGroups[l] = [];
-      d3NodesRef.current.forEach((n: any) => {
-        const lvl = n.level ?? 1;
-        levelGroups[lvl].push(n.id);
-      });
-
-      // ❶ Kill center force
+      // ❶ Remove any center/x/y forces that lock rows
       fg.d3Force('center', null);
+      fg.d3Force('x', null);
+      fg.d3Force('y', null);
 
-      // ❷ Moderate charge repulsion
+      // ❷ Strong charge repulsion — push nodes apart so they don't overlap
       const chargeForce = fg.d3Force('charge');
       if (chargeForce && typeof chargeForce.strength === 'function') {
-        chargeForce.strength(-380);
+        chargeForce.strength(-280);
       }
 
-      // ❸ Link distance
+      // ❸ Link distance — connected nodes attract each other
       const linkForce = fg.d3Force('link');
       if (linkForce && typeof linkForce.distance === 'function') {
-        linkForce.distance((link: any) => {
-          try {
-            const srcId = typeof link.source === 'object' ? link.source?.id : link.source;
-            const tgtId = typeof link.target === 'object' ? link.target?.id : link.target;
-            const srcNode = d3NodesRef.current.find((n: any) => n.id === srcId);
-            const tgtNode = d3NodesRef.current.find((n: any) => n.id === tgtId);
-            return (srcNode?.level === tgtNode?.level) ? 140 : 200;
-          } catch { return 170; }
-        });
+        linkForce.distance(110);
       }
 
-      // ❹ Strong forceY — locks each node to its computed DAG level Y
-      fg.d3Force('y', forceY((node: any) => {
-        return levelY(node.level ?? 1);
-      }).strength(0.9));
+      // ❹ Gentle gravity toward canvas center so graph doesn't drift away
+      fg.d3Force('gravX', forceX(0).strength(0.035));
+      fg.d3Force('gravY', forceY(0).strength(0.035));
 
-      // ❺ forceX — distributes nodes evenly across canvas width per level
-      fg.d3Force('x', forceX((node: any) => {
-        const lvl = node.level ?? 1;
-        const siblings = levelGroups[lvl];
-        const idx   = siblings.indexOf(node.id);
-        const count = Math.max(1, siblings.length);
-        const xRange = Math.min(canvasWidth * 0.88, count * 160);
-        if (count === 1) return 0;
-        return -xRange / 2 + (idx / (count - 1)) * xRange;
-      }).strength(0.55));
-
-      // ❻ Collision
+      // ❺ Collision detection — prevent node overlaps
       const collideForce = forceCollide((node: any) => {
         try {
           const rawDegree = (nodeDegrees && node && node.id) ? (nodeDegrees[node.id] || 0) : 0;
           const degree = typeof rawDegree === 'number' && !isNaN(rawDegree) && rawDegree >= 0 ? rawDegree : 0;
-          return 4 + Math.sqrt(degree) * 1.8 + 48;
-        } catch { return 52; }
+          return 6 + Math.sqrt(degree) * 2 + 36;
+        } catch { return 42; }
       });
       if (collideForce && typeof collideForce.iterations === 'function') {
-        fg.d3Force('collide', collideForce.iterations(4));
+        fg.d3Force('collide', collideForce.iterations(3));
       }
 
       if (typeof fg.d3ReheatSimulation === 'function') {
         fg.d3ReheatSimulation();
       }
     } catch (err) {
-      console.error('Error configuring hierarchical D3 forces:', err);
+      console.error('Error configuring organic D3 forces:', err);
     }
   }, [filteredNodes, nodeDegrees, dimensions]);
 
