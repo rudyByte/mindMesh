@@ -122,7 +122,24 @@ GENERIC_BLACKLIST = {
     "web", "email", "mail", "unknown", "null", "none", "undefined", "n/a", "na",
     "chapter 1", "chapter 2", "chapter 3", "chapter 4", "chapter 5", "chapter 6",
     "section 1", "section 2", "section 3", "section 4", "section 5", "section 6",
-    "table 1", "table 2", "table 3", "figure 1", "figure 2", "figure 3"
+    "table 1", "table 2", "table 3", "figure 1", "figure 2", "figure 3",
+    # Procedure/layout/date noise commonly produced by textbook and lab PDFs
+    "january", "february", "march", "april", "june", "july", "august", "september", "october", "november", "december",
+    "using", "similar", "adding", "building", "whether", "where", "include", "standard", "unplug", "construct",
+    "determine", "consider", "compare", "start", "starting", "according", "identify", "never", "adjust", "choose",
+    "remember", "attach", "turn", "plug", "prof", "objectiv", "background", "reqis", "reqand", "rfrom",
+}
+
+TECHNICAL_SINGLE_WORD_HINTS = {
+    "voltage", "current", "resistance", "resistor", "capacitor", "inductor", "circuit", "voltmeter", "ammeter",
+    "multimeter", "ohm", "ohms", "schematic", "terminal", "battery", "conductor", "insulator", "electron",
+    "charge", "power", "potential", "diode", "transistor", "oscilloscope", "breadboard", "ground",
+}
+
+BAD_ENTITY_TOKENS = {
+    "you", "your", "we", "our", "if", "use", "using", "used", "unlike", "example", "suppose",
+    "provide", "providing", "given", "same", "very", "huge", "small", "large", "low", "high",
+    "material", "materials", "assembly", "operation", "procedure", "objective", "background",
 }
 
 def calculate_entity_quality(name: str, label: str) -> float:
@@ -164,6 +181,9 @@ def calculate_entity_quality(name: str, label: str) -> float:
     if any(w in sentence_triggers for w in words_lower):
         return 0.0
 
+    if any(w in BAD_ENTITY_TOKENS for w in words_lower):
+        return 0.0
+
     # 5. Length checks (too short)
     if len(n_clean) < 4:
         # Technical short acronyms/abbreviations must consist entirely of uppercase letters
@@ -181,6 +201,17 @@ def calculate_entity_quality(name: str, label: str) -> float:
         singular_n = n_lower[:-1]
     if singular_n in GENERIC_BLACKLIST:
         return 0.0
+
+    if len(words) == 1:
+        if n_lower.endswith(("ing", "ed", "ly")):
+            return 0.0
+        # Single-word lowercase/common Title Case candidates are often sentence-start noise.
+        # Keep technical terms/acronyms, but reject generic extracted verbs/months/procedure words.
+        alpha = re.sub(r"[^a-zA-Z]", "", n_clean)
+        is_acronym = alpha.isupper() and len(alpha) >= 2
+        if not is_acronym and n_lower not in TECHNICAL_SINGLE_WORD_HINTS and label == "Keyword":
+            if n_clean.istitle():
+                return 0.45
         
     # Check repeating words: e.g. "Data Data Data", "data data", "Test Test Test", repeated words
     if re.search(r'\b(\w{2,})\b(?:\s+\1\b)+', n_lower):
@@ -217,6 +248,10 @@ def calculate_entity_quality(name: str, label: str) -> float:
         
     # 8. Section headers (e.g. "Chapter 1", "Section A", "Figure 5", "Page 1")
     if re.match(r'^(chapter|section|figure|table|page|index|appendix|vol|volume|no|part|fig)\b', n_lower):
+        return 0.0
+    if re.fullmatch(r'[IVXLCDM]{1,6}', n_clean):
+        return 0.0
+    if n_clean.isupper() and len(words) <= 4 and label in {"Keyword", "Concept", "Topic"}:
         return 0.0
         
     # 9. Common transitional phrases
@@ -723,7 +758,10 @@ class LLMClient:
             "system", "architecture", "method", "algorithm", "model", "approach", 
             "framework", "network", "function", "mechanism", "protocol", "identity", 
             "ledger", "credit", "market", "infrastructure", "verification", "technology",
-            "proof", "signature", "decryption", "blockchain", "contract", "security"
+            "proof", "signature", "decryption", "blockchain", "contract", "security",
+            "law", "circuit", "voltage", "current", "resistance", "resistor", "voltmeter",
+            "ammeter", "multimeter", "schematic", "terminal", "charge", "potential",
+            "difference", "power", "conductor", "insulator", "ohm",
         ]
         
         for sent in sentences:
@@ -772,8 +810,27 @@ class LLMClient:
                                 "description": description
                             }
 
-        # Cap dynamic concept count to 15 per chunk to avoid rendering messy graphs
-        sorted_concepts = list(concepts_map.values())[:15]
+        # 1.2 Extract known technical single-word terms directly from the text.
+        # This is only a no-key fallback path; real LLM extraction remains fully dynamic.
+        lowered_chunk = text_chunk.lower()
+        for term in TECHNICAL_SINGLE_WORD_HINTS:
+            if re.search(rf"\b{re.escape(term)}s?\b", lowered_chunk):
+                normalized_name = " ".join(word.capitalize() for word in singularize_concept_name(term).split())
+                normalized_low = normalized_name.lower()
+                if normalized_low not in concepts_map:
+                    concepts_map[normalized_low] = {
+                        "label": "Concept",
+                        "name": normalized_name,
+                        "description": f"{normalized_name} is discussed in this document section."
+                    }
+
+        # Cap dynamic concept count to 15 per chunk to avoid rendering messy graphs.
+        # Filter before capping so sentence-start/layout words do not crowd out real terms.
+        filtered_concepts = [
+            node for node in concepts_map.values()
+            if calculate_entity_quality(node.get("name", ""), node.get("label", "Concept")) > 0.7
+        ]
+        sorted_concepts = filtered_concepts[:15]
         nodes.extend(sorted_concepts)
         
         # Update concepts_map to only contain the kept concepts

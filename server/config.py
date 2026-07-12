@@ -18,6 +18,12 @@ class Config:
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
     ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
 
+    # Embeddings for entity resolution
+    EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "local").lower()
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    EMBEDDING_SIMILARITY_THRESHOLD = float(os.getenv("EMBEDDING_SIMILARITY_THRESHOLD", "0.85"))
+
     SUPABASE_URL = os.getenv("SUPABASE_URL", "https://mock.supabase.co")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY", "mock-anon-key")
 

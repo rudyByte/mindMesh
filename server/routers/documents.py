@@ -13,8 +13,10 @@ from server.utils.neo4j_client import neo4j_client
 from server.utils.supabase_client import supabase_client
 from server.utils.vercel_blob_client import vercel_blob_client
 from server.utils.llm_client import llm_client, calculate_entity_quality, singularize_concept_name, normalize_and_clean_concept_name, GENERIC_BLACKLIST
+from server.utils.embedding_client import embedding_client, cosine_similarity
 from server.utils.sequence_parser import parse_learning_sequences
 from server.utils.text_cleaner import clean_pdf_text_from_bytes
+from server.config import config
 import re
 
 router = APIRouter()
@@ -82,6 +84,15 @@ def _load_json_state(kind: str, key: str):
         return None
 
 
+def _public_node(node: dict) -> dict:
+    """Return a UI/API-safe node copy without heavy internal vectors."""
+    public = dict(node)
+    public.pop("embedding", None)
+    if not public.get("name") and public.get("title"):
+        public["name"] = public["title"]
+    return public
+
+
 def _save_doc_status(
     doc_id: str,
     status: str,
@@ -130,9 +141,7 @@ def _persist_mock_session_graph(session_id: Optional[str]) -> None:
     node_ids = set()
     for nid, n in neo4j_client.mock_nodes.items():
         if n.get("session_id") == session_id and n.get("label") not in ["Document", "Note", "Highlight", "Citation"]:
-            node = dict(n)
-            if not node.get("name") and node.get("title"):
-                node["name"] = node["title"]
+            node = _public_node(n)
             nodes.append(node)
             node_ids.add(nid)
     edges = [
@@ -364,15 +373,32 @@ def enrich_node_descriptions(canonical_nodes: list, full_text: str):
 
 def cluster_and_merge_nodes(nodes: list) -> tuple[list, dict]:
     clusters = []
+    threshold = getattr(config, "EMBEDDING_SIMILARITY_THRESHOLD", 0.87)
     
     for node in nodes:
         name = node.get("name")
         if not name:
             continue
+        node_embedding = node.get("embedding")
+        if not node_embedding:
+            node_embedding = embedding_client.embed_node(node)
+            node["embedding"] = node_embedding
         matched = False
         for cluster in clusters:
             rep_node = cluster[0]
-            if are_semantically_similar(name, rep_node["name"]):
+            rep_embedding = rep_node.get("embedding")
+            if not rep_embedding:
+                rep_embedding = embedding_client.embed_node(rep_node)
+                rep_node["embedding"] = rep_embedding
+            full_emb_sim = cosine_similarity(node_embedding, rep_embedding)
+            name_emb_sim = cosine_similarity(
+                embedding_client.embed_text(name),
+                embedding_client.embed_text(rep_node["name"]),
+            )
+            emb_sim = max(full_emb_sim, name_emb_sim)
+            acronym_match = is_acronym_of(name, rep_node["name"]) or is_acronym_of(rep_node["name"], name)
+            lexical_match = are_semantically_similar(name, rep_node["name"])
+            if acronym_match or emb_sim >= threshold or (lexical_match and emb_sim >= 0.72):
                 cluster.append(node)
                 matched = True
                 break
@@ -422,7 +448,8 @@ def cluster_and_merge_nodes(nodes: list) -> tuple[list, dict]:
             "label": rep.get("label", "Concept"),
             "name": rep["name"].strip(),
             "description": canonical_desc,
-            "difficulty_level": rep.get("difficulty_level", "Beginner")
+            "difficulty_level": rep.get("difficulty_level", "Beginner"),
+            "embedding": rep.get("embedding") or embedding_client.embed_node(rep)
         }
         for k, v in rep.items():
             if k not in canonical_node:
@@ -705,13 +732,14 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                                 "description": mn.get("description", ""),
                                 "difficulty_level": mn.get("difficulty_level", "Beginner"),
                                 "level": mn.get("level"),
+                                "embedding": mn.get("embedding"),
                                 "is_existing": True
                             })
                 else:
                     query = """
                     MATCH (n)
                     WHERE n.session_id = $session_id AND NOT n:Document AND NOT n:Note AND NOT n:Highlight AND NOT n:Citation
-                    RETURN labels(n)[0] as label, coalesce(n.name, n.title) as name, n.description as description, n.difficulty_level as difficulty_level, n.level as level
+                    RETURN labels(n)[0] as label, coalesce(n.name, n.title) as name, n.description as description, n.difficulty_level as difficulty_level, n.level as level, n.embedding as embedding
                     """
                     res = neo4j_client.run_query(query, {"session_id": session_id})
                     for r in res:
@@ -721,6 +749,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                             "description": r.get("description") or "",
                             "difficulty_level": r.get("difficulty_level") or "Beginner",
                             "level": r.get("level"),
+                            "embedding": r.get("embedding"),
                             "is_existing": True
                         })
                 logger.info(f"Retrieved {len(existing_nodes)} existing nodes from session {session_id} for persistent graph merging.")
@@ -1122,6 +1151,22 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             logger.info(f"  - {rel.get('from')} --[{rel.get('type')}]--> {rel.get('to')}")
             
         logger.info(f"Writing {len(canonical_nodes)} canonical nodes and {len(final_relationships)} connected relationships to Neo4j.")
+        try:
+            first_embedding = next((n.get("embedding") for n in canonical_nodes if n.get("embedding")), None)
+            if first_embedding and not neo4j_client.is_mock():
+                neo4j_client.run_query(
+                    f"""
+                    CREATE VECTOR INDEX concept_embedding IF NOT EXISTS
+                    FOR (n:Concept) ON (n.embedding)
+                    OPTIONS {{indexConfig: {{
+                        `vector.dimensions`: {len(first_embedding)},
+                        `vector.similarity_function`: 'cosine'
+                    }}}}
+                    """,
+                    {}
+                )
+        except Exception as e:
+            logger.warning(f"Could not ensure Neo4j concept embedding index: {e}")
         
         # Write nodes to Neo4j
         for node in canonical_nodes:
@@ -1145,22 +1190,22 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 if session_id:
                     query = """
                     MERGE (n:Paper {name: $name, session_id: $session_id})
-                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id, n.year = $year, n.venue = $venue, n.doi = $doi
-                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.venue = $venue, n.doi = $doi
+                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id, n.year = $year, n.venue = $venue, n.doi = $doi, n.embedding = $embedding
+                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.venue = $venue, n.doi = $doi, n.embedding = coalesce(n.embedding, $embedding)
                     RETURN n.id as node_id
                     """
                 elif multi_doc_mode:
                     query = """
                     MERGE (n:Paper {name: $name})
-                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id, n.year = $year, n.venue = $venue, n.doi = $doi
-                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.venue = $venue, n.doi = $doi
+                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id, n.year = $year, n.venue = $venue, n.doi = $doi, n.embedding = $embedding
+                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.venue = $venue, n.doi = $doi, n.embedding = coalesce(n.embedding, $embedding)
                     RETURN n.id as node_id
                     """
                 else:
                     query = """
                     MERGE (n:Paper {name: $name, doc_id: $doc_id})
-                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.year = $year, n.venue = $venue, n.doi = $doi
-                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.venue = $venue, n.doi = $doi
+                    ON CREATE SET n.id = $id, n.title = $name, n.description = $description, n.difficulty_level = 'Beginner', n.year = $year, n.venue = $venue, n.doi = $doi, n.embedding = $embedding
+                    ON MATCH SET n.title = $name, n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.year = $year, n.venue = $venue, n.doi = $doi, n.embedding = coalesce(n.embedding, $embedding)
                     RETURN n.id as node_id
                     """
             else:
@@ -1168,24 +1213,24 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                     query = f"""
                     MERGE (n:Concept {{name: $name, session_id: $session_id}})
                     SET n:{label}
-                    ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id
-                    ON MATCH SET n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END
+                    ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id, n.embedding = $embedding
+                    ON MATCH SET n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.embedding = coalesce(n.embedding, $embedding)
                     RETURN n.id as node_id
                     """
                 elif multi_doc_mode:
                     query = f"""
                     MERGE (n:Concept {{name: $name}})
                     SET n:{label}
-                    ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id
-                    ON MATCH SET n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END
+                    ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner', n.doc_id = $doc_id, n.embedding = $embedding
+                    ON MATCH SET n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.embedding = coalesce(n.embedding, $embedding)
                     RETURN n.id as node_id
                     """
                 else:
                     query = f"""
                     MERGE (n:Concept {{name: $name, doc_id: $doc_id}})
                     SET n:{label}
-                    ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner'
-                    ON MATCH SET n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END
+                    ON CREATE SET n.id = $id, n.description = $description, n.difficulty_level = 'Beginner', n.embedding = $embedding
+                    ON MATCH SET n.description = CASE WHEN n.description IS NULL OR n.description = '' THEN $description ELSE n.description END, n.embedding = coalesce(n.embedding, $embedding)
                     RETURN n.id as node_id
                     """
             
@@ -1197,7 +1242,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 "session_id": session_id,
                 "year": node.get("year"),
                 "venue": node.get("venue"),
-                "doi": node.get("doi")
+                "doi": node.get("doi"),
+                "embedding": node.get("embedding") or embedding_client.embed_node(node)
             })
             
             # Capture the resolved node ID
@@ -1233,6 +1279,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                         neo4j_client.mock_nodes[resolved_id]["description"] = desc
                     if node.get("level"):
                         neo4j_client.mock_nodes[resolved_id]["level"] = node["level"]
+                    if node.get("embedding"):
+                        neo4j_client.mock_nodes[resolved_id]["embedding"] = node["embedding"]
                 else:
                     resolved_id = node_id
                     node_data = {
@@ -1242,7 +1290,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                         "description": desc,
                         "difficulty_level": "Beginner",
                         "doc_id": doc_id,
-                        "session_id": session_id
+                        "session_id": session_id,
+                        "embedding": node.get("embedding") or embedding_client.embed_node(node)
                     }
                     if node.get("level"):
                         node_data["level"] = node["level"]
@@ -1832,7 +1881,7 @@ def get_document_graph(id: str, session_id: Optional[str] = Query(None)):
             persisted_status = _load_json_state("doc-status", id)
             persisted_graph = _load_json_state("session-graph", persisted_status.get("session_id")) if persisted_status else None
             if persisted_graph:
-                nodes = [n for n in persisted_graph.get("nodes", []) if n.get("doc_id") == id]
+                nodes = [_public_node(n) for n in persisted_graph.get("nodes", []) if n.get("doc_id") == id]
                 node_ids = {n.get("id") for n in nodes}
                 edges = [
                     e for e in persisted_graph.get("edges", [])
@@ -1852,10 +1901,7 @@ def get_document_graph(id: str, session_id: Optional[str] = Query(None)):
             ml_nodes = []
             for n in neo4j_client.mock_nodes.values():
                 if n.get("label") != "Document":
-                    n_copy = dict(n)
-                    if not n_copy.get("name") and n_copy.get("title"):
-                        n_copy["name"] = n_copy["title"]
-                    ml_nodes.append(n_copy)
+                    ml_nodes.append(_public_node(n))
             ml_node_ids = {n["id"] for n in ml_nodes}
             ml_edges = [
                 e for e in neo4j_client.mock_edges 
@@ -1872,10 +1918,7 @@ def get_document_graph(id: str, session_id: Optional[str] = Query(None)):
                 if not multi_doc_mode and node_doc_id and node_doc_id != id:
                     logger.error(f"Validation Error: Node {n.get('name') or n.get('title')} belongs to document {node_doc_id}, expected {id}")
                     continue
-                n_copy = dict(n)
-                if not n_copy.get("name") and n_copy.get("title"):
-                    n_copy["name"] = n_copy["title"]
-                doc_nodes.append(n_copy)
+                doc_nodes.append(_public_node(n))
                 
         doc_edges = [
             e for e in neo4j_client.mock_edges 
@@ -1941,10 +1984,7 @@ def get_session_graph(session_id: str):
         session_node_ids = set()
         for nid, n in neo4j_client.mock_nodes.items():
             if n.get("session_id") == session_id and n.get("label") not in ["Document", "Note", "Highlight", "Citation"]:
-                n_copy = dict(n)
-                if not n_copy.get("name") and n_copy.get("title"):
-                    n_copy["name"] = n_copy["title"]
-                session_nodes.append(n_copy)
+                session_nodes.append(_public_node(n))
                 session_node_ids.add(nid)
             
         session_edges = [
@@ -1955,7 +1995,7 @@ def get_session_graph(session_id: str):
             persisted_graph = _load_json_state("session-graph", session_id)
             if persisted_graph:
                 return {
-                    "nodes": persisted_graph.get("nodes", []),
+                    "nodes": [_public_node(n) for n in persisted_graph.get("nodes", [])],
                     "edges": persisted_graph.get("edges", [])
                 }
         return {"nodes": session_nodes, "edges": session_edges}
