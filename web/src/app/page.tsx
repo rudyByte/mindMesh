@@ -226,12 +226,12 @@ export default function DashboardPage() {
               {activeTab === 'map' && (
                 <>
                   <button
-                    onClick={() => setGraphMode('basic')}
-                    data-active={graphMode === 'basic'}
+                    onClick={() => setGraphMode('path')}
+                    data-active={graphMode === 'path'}
                     className="px-2 py-1.5 text-[11px] font-bold rounded flex items-center justify-center gap-1 transition-all cursor-pointer whitespace-nowrap shrink-0"
                   >
                     <Compass className="w-3.5 h-3.5 hidden sm:block" />
-                    Prerequisites
+                    Learning Path
                   </button>
                   
                   <button

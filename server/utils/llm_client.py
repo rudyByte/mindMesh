@@ -163,11 +163,7 @@ GENERIC_BLACKLIST = {
     "remember", "attach", "turn", "plug", "prof", "objectiv", "background", "reqis", "reqand", "rfrom",
 }
 
-TECHNICAL_SINGLE_WORD_HINTS = {
-    "voltage", "current", "resistance", "resistor", "capacitor", "inductor", "circuit", "voltmeter", "ammeter",
-    "multimeter", "ohm", "ohms", "schematic", "terminal", "battery", "conductor", "insulator", "electron",
-    "charge", "power", "potential", "diode", "transistor", "oscilloscope", "breadboard", "ground",
-}
+TECHNICAL_SINGLE_WORD_HINTS: set[str] = set()
 
 BAD_ENTITY_TOKENS = {
     "you", "your", "we", "our", "if", "use", "using", "used", "unlike", "example", "suppose",
@@ -209,7 +205,7 @@ def calculate_entity_quality(name: str, label: str) -> float:
         "does", "did", "shows", "defines", "refers", "represents", "describes", "explains", "contains", 
         "provides", "used", "includes", "introduces", "integrates", "demonstrates", "illustrates", "proves", 
         "analyzes", "implements", "requires", "needs", "allows", "enables", "creates", "helps", "makes", 
-        "involves", "focuses", "suggests", "indicates", "supports"
+        "involves", "focuses", "suggests", "indicates", "supports", "uses", "occurs", "occur"
     }
     if any(w in sentence_triggers for w in words_lower):
         return 0.0
@@ -795,15 +791,15 @@ class LLMClient:
                         "description": description
                     }
 
-        # 1.1 Extract Technical Suffix Phrases (Domain Specific Noun Phrases)
+        # 1.1 Extract text-driven noun phrases around generic academic head nouns.
+        # No subject-specific vocabulary belongs in fallback extraction.
         domain_keywords = [
             "system", "architecture", "method", "algorithm", "model", "approach", 
             "framework", "network", "function", "mechanism", "protocol", "identity", 
-            "ledger", "credit", "market", "infrastructure", "verification", "technology",
-            "proof", "signature", "decryption", "blockchain", "contract", "security",
-            "law", "circuit", "voltage", "current", "resistance", "resistor", "voltmeter",
-            "ammeter", "multimeter", "schematic", "terminal", "charge", "potential",
-            "difference", "power", "conductor", "insulator", "ohm",
+            "infrastructure", "verification", "technology", "principle", "law", "theory",
+            "concept", "property", "quantity", "unit", "device", "instrument", "component",
+            "structure", "reaction", "cycle", "pathway", "equation", "relationship",
+            "difference", "measurement", "technique", "application", "dataset", "benchmark",
         ]
         
         for sent in sentences:
@@ -852,19 +848,23 @@ class LLMClient:
                                 "description": description
                             }
 
-        # 1.2 Extract known technical single-word terms directly from the text.
-        # This is only a no-key fallback path; real LLM extraction remains fully dynamic.
-        lowered_chunk = text_chunk.lower()
-        for term in TECHNICAL_SINGLE_WORD_HINTS:
-            if re.search(rf"\b{re.escape(term)}s?\b", lowered_chunk):
-                normalized_name = " ".join(word.capitalize() for word in singularize_concept_name(term).split())
-                normalized_low = normalized_name.lower()
-                if normalized_low not in concepts_map:
-                    concepts_map[normalized_low] = {
-                        "label": "Concept",
-                        "name": normalized_name,
-                        "description": f"{normalized_name} is discussed in this document section."
-                    }
+        # 1.2 Extract repeated single-word terms from this text only.
+        token_counts = Counter(
+            t.lower()
+            for t in re.findall(r"\b[A-Za-z][A-Za-z-]{4,}\b", text_chunk)
+            if t.lower() not in STOP_WORDS and t.lower() not in GENERIC_BLACKLIST
+        )
+        for term, count in token_counts.most_common(30):
+            if count < 2:
+                continue
+            normalized_name = " ".join(word.capitalize() for word in singularize_concept_name(term).split())
+            normalized_low = normalized_name.lower()
+            if normalized_low not in concepts_map and calculate_entity_quality(normalized_name, "Concept") > 0.7:
+                concepts_map[normalized_low] = {
+                    "label": "Concept",
+                    "name": normalized_name,
+                    "description": f"{normalized_name} is discussed in this document section."
+                }
 
         # Cap dynamic concept count to 15 per chunk to avoid rendering messy graphs.
         # Filter before capping so sentence-start/layout words do not crowd out real terms.
@@ -1048,42 +1048,7 @@ class LLMClient:
 
     def generate_prerequisites(self, concept: str) -> list:
         if self._is_mock:
-            lower_concept = concept.lower()
-            if "voltmeter" in lower_concept:
-                return [
-                    {"name": "Voltage", "description": "Electric potential difference."},
-                    {"name": "Electric Circuit", "description": "Closed loop network."},
-                    {"name": "Current", "description": "Flow of electric charge."},
-                    {"name": "Resistance", "description": "Opposition to current flow."}
-                ]
-            elif "ohm" in lower_concept:
-                return [
-                    {"name": "Electric Charge", "description": "Fundamental property of matter."},
-                    {"name": "Electric Potential (Voltage)", "description": "Electric potential difference."},
-                    {"name": "Electric Current", "description": "Flow of electric charge."},
-                    {"name": "Resistance", "description": "Opposition to current flow."},
-                    {"name": "Electric Circuit", "description": "Closed loop network."},
-                    {"name": "Ohm's Law", "description": "V = IR"}
-                ]
-            elif "resist" in lower_concept:
-                return [
-                    {"name": "Electric Charge", "description": "Fundamental property of matter."},
-                    {"name": "Electric Potential (Voltage)", "description": "Electric potential difference."},
-                    {"name": "Resistance", "description": "Opposition to current flow."}
-                ]
-            elif "transformer" in lower_concept:
-                return [
-                    {"name": "Neural Networks", "description": "Computing systems inspired by biological brains."},
-                    {"name": "Matrix Multiplication", "description": "Mathematical operation on matrices."},
-                    {"name": "Self Attention", "description": "Mechanism relating different positions of a sequence."},
-                    {"name": "Embeddings", "description": "Continuous vector representations of discrete variables."},
-                    {"name": "Positional Encoding", "description": "Injecting information about the relative or absolute position of tokens."}
-                ]
-            else:
-                return [
-                    {"name": "Foundational Principles", "description": "Core concepts required for understanding."},
-                    {"name": "Basic Theory", "description": "Theoretical framework."}
-                ]
+            return []
             
         system_prompt = (
             "You are an educational prerequisite generator. Given a concept, return ONLY the real academic concepts "
@@ -1208,14 +1173,7 @@ class LLMClient:
             return []
             
         if self._is_mock:
-            lower_target = target_concept.lower()
-            if "ohm" in lower_target:
-                return [{"name": c, "reason": "Linear progression"} for c in ["Electric Charge", "Electric Potential (Voltage)", "Electric Current", "Resistance", "Electric Circuit", "Ohm's Law"] if c in available_concepts and c != target_concept]
-            elif "resist" in lower_target:
-                return [{"name": c, "reason": "True ancestors"} for c in ["Electric Charge", "Electric Potential (Voltage)", "Resistance"] if c in available_concepts and c != target_concept]
-            # Mock behavior: return up to 2 items if they exist
-            mock_prereqs = [{"name": c, "reason": "Mock reason"} for c in available_concepts if c != target_concept][:2]
-            return mock_prereqs
+            return []
             
         system_prompt = (
             "You are an expert curriculum designer and strict graph dependency analyzer.\n"
@@ -1229,13 +1187,13 @@ class LLMClient:
             "6. Return the result as a JSON object containing a 'prerequisites' array of objects, each with 'name' and 'reason'.\n"
             "7. If there are no true prerequisite concepts in the list, return an empty array.\n\n"
             "Example:\n"
-            "Target: 'Voltmeter'\n"
-            "Available: ['Circuit', 'Scientific', 'Voltage', 'Similar', 'Current', 'Resistance']\n"
+            "Target: 'Target Concept'\n"
+            "Available: ['Foundational Concept', 'Metadata Tag', 'Supporting Mechanism', 'Application']\n"
             "Output:\n"
             "{\n"
             "  \"prerequisites\": [\n"
-            "    {\"name\": \"Voltage\", \"reason\": \"A voltmeter specifically measures voltage, making it a required foundational concept.\"},\n"
-            "    {\"name\": \"Current\", \"reason\": \"Voltage and current are inherently linked in electrical circuits.\"}\n"
+            "    {\"name\": \"Foundational Concept\", \"reason\": \"It explains the base idea required before the target.\"},\n"
+            "    {\"name\": \"Supporting Mechanism\", \"reason\": \"It describes how the target operates.\"}\n"
             "  ]\n"
             "}\n"
         )
@@ -1282,33 +1240,13 @@ class LLMClient:
         using the LLM, bypassing database relationships.
         """
         if self._is_mock:
-            lower_target = target_concept.lower()
-            if "ohm" in lower_target:
-                return [
-                    {"name": "Electric Charge", "description": "Fundamental property of matter.", "difficulty": "Easy", "duration": "10 min"},
-                    {"name": "Electric Potential (Voltage)", "description": "Electric potential difference.", "difficulty": "Medium", "duration": "15 min"},
-                    {"name": "Electric Current", "description": "Flow of electric charge.", "difficulty": "Medium", "duration": "10 min"},
-                    {"name": "Resistance", "description": "Opposition to current flow.", "difficulty": "Medium", "duration": "10 min"},
-                    {"name": "Electric Circuit", "description": "Closed loop network.", "difficulty": "Medium", "duration": "20 min"},
-                    {"name": "Ohm's Law", "description": "Mathematical relationship V = IR.", "difficulty": "Medium", "duration": "15 min"}
-                ]
-            if "thread" in lower_target or "multithreading" in lower_target:
-                return [
-                    {"name": "Basic Programming Syntax", "description": "Foundation of writing code.", "difficulty": "Easy", "duration": "15 min"},
-                    {"name": "Java Core", "description": "Core language mechanics.", "difficulty": "Medium", "duration": "20 min"},
-                    {"name": "Object-Oriented Programming (OOP)", "description": "Classes, objects, inheritance.", "difficulty": "Medium", "duration": "30 min"},
-                    {"name": "Process vs Thread Concept", "description": "OS level execution units.", "difficulty": "Advanced", "duration": "20 min"},
-                    {"name": target_concept, "description": "Concurrent execution model.", "difficulty": "Advanced", "duration": "25 min"}
-                ]
-            if "array" in lower_target:
-                return [
-                    {"name": "Variables and Data Types", "description": "Storing single values.", "difficulty": "Easy", "duration": "10 min"},
-                    {"name": "Memory Allocation Basics", "description": "How RAM stores data.", "difficulty": "Medium", "duration": "15 min"},
-                    {"name": target_concept, "description": "Contiguous memory blocks for lists.", "difficulty": "Easy", "duration": "10 min"}
-                ]
             return [
-                {"name": "Foundational Concept", "description": "Core basic idea", "difficulty": "Easy", "duration": "5 min"},
-                {"name": target_concept, "description": "The target concept itself", "difficulty": "Medium", "duration": "10 min"}
+                {
+                    "name": target_concept,
+                    "description": "Target concept from the uploaded document. Select connected graph nodes to expand real prerequisites.",
+                    "difficulty": "Medium",
+                    "duration": "20 min",
+                }
             ]
 
         system_prompt = (
@@ -1388,6 +1326,13 @@ class LLMClient:
             return data
         except Exception as e:
             logger.error(f"Failed to generate concept details (Auth Error or API Failure): {e}")
+            return {
+                "definition": f"{concept_name} is a concept extracted from the uploaded document. The graph shows its document-local learning relationships.",
+                "how_it_works": "Use Path View to inspect prerequisite nodes above it and extension/application nodes below it. Add a live LLM key for richer generated explanations.",
+                "formula_syntax": "No formula or syntax was grounded for this concept yet.",
+                "properties": "• Document-local concept\n• Dynamic graph node\n• Explanation grounded by extracted context",
+                "image_url": None,
+            }
             
             c_name = concept_name.lower()
             

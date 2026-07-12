@@ -543,8 +543,6 @@ def _sample_document_text(text: str, max_chars: int = 9000) -> str:
 def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dict) -> dict:
     """LLM-free, document-local hierarchy. No fixed PDFs or domain templates."""
     topic_name = main_topic_info.get("name") or filename.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").title()
-    if re.search(r"\bohm'?s?\s+law\b", topic_name, re.IGNORECASE):
-        topic_name = "Ohm's Law"
     topic_name = _display_concept_name(topic_name)
     topic_desc = main_topic_info.get("description") or f"{topic_name} is the main topic extracted from {filename}."
     bad_fragment_words = {
@@ -555,6 +553,8 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
         "operation", "procedure", "objectives", "background", "turn", "plug", "unplug",
         "absorbs", "absorb", "split", "splits", "fixes", "fix", "produce", "produces",
         "regulate", "regulates", "compare", "compares", "explain", "explains",
+        "occur", "occurs", "leaf", "leaves", "leave", "that", "measure", "measures",
+        "connect", "connected", "parallel", "across", "depend", "depends", "include", "includes",
     }
     stop = {
         "abstract", "introduction", "conclusion", "references", "figure", "table", "chapter", "section",
@@ -565,34 +565,12 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
         "blue", "black", "white", "wire", "wires", "january", "february", "march", "april", "may",
         "june", "july", "august", "september", "october", "november", "december"
     } | bad_fragment_words | GENERIC_BLACKLIST
-    canonical_patterns = [
-        (r"\b(potential\s+difference|electric\s+potential|electrical\s+potential|voltage\s+drop)\b", "Potential Difference"),
-        (r"\b(voltmeter|digital\s+voltmeter)\b", "Voltmeter"),
-        (r"\b(ammeter)\b", "Ammeter"),
-        (r"\b(multimeter|digital\s+multimeter)\b", "Digital Multimeter"),
-        (r"\b(ohm'?s?\s+law|ohm)\b", "Ohm's Law"),
-        (r"\b(resistance|resistor|equivalent\s+resistance)\b", "Resistance"),
-        (r"\b(current|electric\s+current)\b", "Current"),
-        (r"\b(voltage|constant\s+voltage|varying\s+voltage)\b", "Voltage"),
-        (r"\b(circuit|electronic\s+circuit|series\s+circuit|parallel\s+circuit)\b", "Circuit"),
-        (r"\b(charge|negative\s+charge|electric\s+charge|electron|electrons)\b", "Electric Charge"),
-        (r"\b(schematic|schematics)\b", "Schematic"),
-        (r"\b(color\s+code|resistor\s+color\s+code)\b", "Resistor Color Code"),
-        (r"\b(breadboard)\b", "Breadboard"),
-        (r"\b(terminal|positive\s+terminal|negative\s+terminal)\b", "Terminal"),
-        (r"\b(power\s+supply|power)\b", "Power Supply"),
-    ]
-
     def canonicalize_candidate(raw_name: str) -> str:
         low = raw_name.lower()
-        for pattern, canonical in canonical_patterns:
-            if re.search(pattern, low):
-                return canonical
         if any(w in bad_fragment_words for w in low.split()):
             return ""
         return raw_name
 
-    canonical_names = {canonical for _, canonical in canonical_patterns}
     phrase_counts: dict[str, int] = {}
 
     def add_candidate(raw: str, weight: int = 1):
@@ -603,7 +581,7 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
         if _concept_identity_key(name) == _concept_identity_key(topic_name):
             return
         low = name.lower()
-        if low in stop or any(w in stop for w in low.split()):
+        if low in stop or (len(low.split()) == 1 and any(w in stop for w in low.split())):
             return
         if re.search(r"\b(using|attach|connect|record|observe|calculate|step|last|next)\b", low):
             return
@@ -620,8 +598,7 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
     ]:
         for raw in re.findall(pattern, text):
             candidate_name = canonicalize_candidate(normalize_and_clean_concept_name(raw))
-            weight = 4 if candidate_name in canonical_names else 1
-            add_candidate(raw, weight)
+            add_candidate(candidate_name or raw, 1)
 
     subject_verbs = r"absorbs?|splits?|fix(?:es)?|produces?|regulates?|measures?|explains?|causes?|requires?|uses?"
     for raw in re.findall(rf"\b([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){{0,2}})\s+(?:{subject_verbs})\b", text):
@@ -630,14 +607,27 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
     for raw in re.findall(r"\b(?:in|inside|within|into)\s+([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,2})\b", text, flags=re.IGNORECASE):
         add_candidate(raw, 2)
 
+    def trim_relation_phrase(raw: str) -> str:
+        phrase = re.sub(r"\b(?:a|an|the)\b", " ", raw, flags=re.IGNORECASE)
+        phrase = re.split(
+            r"\b(?:between|across|through|with|without|from|into|inside|within|during|when|where|that|which|used|uses|occurs?|requires?|depends)\b",
+            phrase,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        return normalize_and_clean_concept_name(phrase)
+
+    relation_seed_patterns = [
+        r"\b([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,3})\s+(?:is|are|means|refers\s+to|is\s+defined\s+as|denotes)\s+(?:an|a|the)?\s*([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,5})\b",
+        r"\b([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,3})\s+(?:depends\s+on|requires|needs)\s+([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,5})\b",
+    ]
+    for pattern in relation_seed_patterns:
+        for left, right in re.findall(pattern, text, flags=re.IGNORECASE):
+            add_candidate(trim_relation_phrase(left), 4)
+            add_candidate(trim_relation_phrase(right), 4)
+
     ranked_all = sorted(phrase_counts.items(), key=lambda item: (item[1], len(item[0])), reverse=True)
-    canonical_ranked = [item for item in ranked_all if item[0] in canonical_names]
-    if len(canonical_ranked) >= 5:
-        # When the fallback has a strong technical signal, prefer the clean canonical
-        # concepts and suppress UI/procedure fragments from lab sheets.
-        ranked = (canonical_ranked + [item for item in ranked_all if item[0] not in canonical_names and item[1] >= 3])[:14]
-    else:
-        ranked = ranked_all[:14]
+    ranked = ranked_all[:14]
     nodes = [{
         "label": "Topic",
         "name": topic_name,
@@ -664,6 +654,52 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
             seen.add(key)
             rels.append({"from": source, "to": target, "type": rel})
 
+    by_key = {_concept_identity_key(n["name"]): n["name"] for n in nodes}
+
+    def find_node_phrase(raw: str) -> str:
+        candidate = normalize_and_clean_concept_name(raw)
+        if not candidate:
+            return ""
+        key = _concept_identity_key(candidate)
+        if key in by_key:
+            return by_key[key]
+        for existing_key, existing_name in by_key.items():
+            if key and (key in existing_key or existing_key in key):
+                return existing_name
+        return ""
+
+    definition_patterns = [
+        r"\b([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,3})\s+(?:is|are|means|refers\s+to|is\s+defined\s+as|denotes)\s+(?:an|a|the)?\s*([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,3})\b",
+        r"\b([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,3})\s+(?:depends\s+on|requires|needs)\s+([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,3})\b",
+    ]
+    for pattern in definition_patterns:
+        for left, right in re.findall(pattern, text, flags=re.IGNORECASE):
+            left_name = find_node_phrase(left)
+            right_name = find_node_phrase(right)
+            if not left_name or not right_name or left_name == right_name:
+                continue
+            source, target = right_name, left_name
+            key = (source, target, "PREREQUISITE_OF")
+            if key not in seen:
+                seen.add(key)
+                rels.append({"from": source, "to": target, "type": "PREREQUISITE_OF"})
+
+    contains_patterns = [
+        r"\b([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,3})\s+(?:contains|includes|consists\s+of|has)\s+([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,3})\b",
+        r"\b([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,3})\s+(?:is|are)\s+(?:part|component)\s+of\s+([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,3})\b",
+    ]
+    for idx, pattern in enumerate(contains_patterns):
+        for left, right in re.findall(pattern, text, flags=re.IGNORECASE):
+            left_name = find_node_phrase(left)
+            right_name = find_node_phrase(right)
+            if not left_name or not right_name or left_name == right_name:
+                continue
+            source, target = (left_name, right_name) if idx == 0 else (right_name, left_name)
+            key = (source, target, "CONTAINS")
+            if key not in seen:
+                seen.add(key)
+                rels.append({"from": source, "to": target, "type": "CONTAINS"})
+
     return {"nodes": nodes, "relationships": rels}
 
 
@@ -688,27 +724,8 @@ def _infer_learning_prerequisite_edges(nodes: list[dict]) -> list[dict]:
                 matches.append(original)
         return matches
 
-    rules = [
-        (["voltmeter"], [["voltage"], ["potential difference"], ["circuit"]]),
-        (["ammeter"], [["current"], ["circuit"]]),
-        (["ohms law"], [["voltage"], ["current"], ["resistance"], ["circuit"]]),
-        (["resistance"], [["current"], ["voltage"], ["circuit"]]),
-        (["voltage"], [["potential difference"], ["electric charge"]]),
-        (["potential difference"], [["electric charge"]]),
-    ]
-
     inferred = []
     seen = set()
-    for target_patterns, prereq_groups in rules:
-        targets = find_any(target_patterns)
-        for target in targets:
-            for prereq_patterns in prereq_groups:
-                prereqs = find_any(prereq_patterns, exclude=target)
-                for prereq in prereqs[:2]:
-                    key = (prereq, target)
-                    if prereq != target and key not in seen:
-                        seen.add(key)
-                        inferred.append({"from": prereq, "to": target, "type": "PREREQUISITE_OF"})
     return inferred
 
 

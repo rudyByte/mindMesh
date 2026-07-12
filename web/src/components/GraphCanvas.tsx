@@ -497,17 +497,17 @@ export default function GraphCanvas() {
     switch (type) {
       case 'PREREQUISITE_OF':
       case 'PREREQUISITE':
-        return 'rgba(34, 211, 238, 0.82)';
+        return 'rgba(34, 211, 238, 0.95)';
       case 'EXTENDS':
       case 'USED_FOR':
-        return 'rgba(16, 185, 129, 0.74)';
+        return 'rgba(16, 185, 129, 0.9)';
       case 'CITES':
       case 'MENTIONS':
-        return 'rgba(168, 85, 247, 0.68)';
+        return 'rgba(168, 85, 247, 0.86)';
       case 'HAS_KEYWORD':
-        return 'rgba(20, 184, 166, 0.58)';
+        return 'rgba(20, 184, 166, 0.76)';
       default:
-        return 'rgba(148, 163, 184, 0.48)';
+        return 'rgba(203, 213, 225, 0.72)';
     }
   };
 
@@ -746,15 +746,15 @@ export default function GraphCanvas() {
             }}
             linkWidth={(link: any) => {
               try {
-                if (isPathLink(link)) return 3.5;
+                if (isPathLink(link)) return 5.2;
                 const type = link?.type || 'RELATED_TO';
-                return type === 'PREREQUISITE_OF' || type === 'PREREQUISITE' ? 2.4 : 1.8;
+                return type === 'PREREQUISITE_OF' || type === 'PREREQUISITE' ? 4.2 : 3.0;
               } catch (err) {
-                return 1.8;
+                return 3.0;
               }
             }}
             linkCurvature={0.25}
-            linkDirectionalArrowLength={6}
+            linkDirectionalArrowLength={8}
             cooldownTicks={graphMode === 'path' ? 0 : 120}
             linkDirectionalArrowRelPos={1}
             linkDirectionalParticles={(link: any) => {
@@ -766,9 +766,9 @@ export default function GraphCanvas() {
             }}
             linkDirectionalParticleWidth={(link: any) => {
               try {
-                return isPathLink(link) ? 2.0 : 0.8;
+                return isPathLink(link) ? 2.8 : 1.4;
               } catch (err) {
-                return 0.8;
+                return 1.4;
               }
             }}
             linkDirectionalParticleSpeed={(link: any) => {
@@ -807,10 +807,10 @@ export default function GraphCanvas() {
                 
                 // Fixed font size between 10-14px that scales properly with zoom
                 const scale = typeof globalScale === 'number' && !isNaN(globalScale) && globalScale > 0 ? globalScale : 1;
-                const fontSize = Math.max(7, 17 / scale);
+                const fontSize = Math.max(10, 21 / scale);
                 const rawDegree = (nodeDegrees && node.id) ? (nodeDegrees[node.id] || 0) : 0;
                 const degree = typeof rawDegree === 'number' && !isNaN(rawDegree) && rawDegree >= 0 ? rawDegree : 0;
-                const radius = 3 + Math.sqrt(degree) * 1.5;
+                const radius = 4 + Math.sqrt(degree) * 1.8;
                 
                 const isSelected = selectedNode?.id === node.id;
                 const isPathNode = activePathNodeIds && activePathNodeIds.includes(node.id);
@@ -928,7 +928,7 @@ export default function GraphCanvas() {
                 
                 // Draw background rectangle for text readability at high zoom
                 const textWidth = ctx.measureText(label).width;
-                ctx.fillStyle = 'rgba(3, 12, 11, 0.85)';
+                ctx.fillStyle = 'rgba(3, 12, 11, 0.92)';
                 ctx.fillRect(
                   x - textWidth / 2 - 3,
                   y + radius + 2,

@@ -5,7 +5,10 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from openai import AsyncOpenAI
+try:
+    from openai import AsyncOpenAI
+except Exception:
+    AsyncOpenAI = None
 
 from server.utils.neo4j_client import neo4j_client
 from server.utils.llm_client import llm_client
@@ -286,6 +289,8 @@ async def generate_live_stream(message: str, context: dict, history: list, user_
     )
 
     try:
+        if AsyncOpenAI is None:
+            raise RuntimeError("OpenAI SDK not installed in this runtime.")
         # Groq async streaming client (OpenAI-compatible)
         aclient = AsyncOpenAI(api_key=config.GROQ_API_KEY, base_url=config.GROQ_BASE_URL)
         messages_payload = []

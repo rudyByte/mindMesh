@@ -811,7 +811,10 @@ def expand_graph(
             RETURN p
             """
         
-    path_res = neo4j_client.run_query(cypher, {"id": node_id, "depth": depth, "doc_id": document_id})
+    path_res = neo4j_client.run_query(
+        cypher,
+        {"id": node_id, "depth": depth, "doc_id": document_id, "session_id": session_id},
+    )
     
     for record in path_res:
         path = record.get("p")

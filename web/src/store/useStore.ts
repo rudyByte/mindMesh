@@ -262,7 +262,7 @@ export const useStore = create<AppState>((set) => ({
         citations: sessionData?.citations || [],
         activeDocumentId: sessionData?.activeDocumentId || null,
         graphDepth: sessionData?.graphDepth || 1,
-        graphMode: sessionData?.graphMode || 'basic',
+        graphMode: sessionData?.graphMode || 'path',
         selectedNode: null,
         activePathNodeIds: [],
         learningPathNarration: null,
@@ -314,7 +314,7 @@ export const useStore = create<AppState>((set) => ({
         citations: [],
         activeDocumentId: null,
         graphDepth: 1,
-        graphMode: 'basic' as const
+        graphMode: 'path' as const
       };
       localStorage.setItem(`mindmesh_session_data_${newId}`, JSON.stringify(newSessionData));
       
@@ -328,7 +328,7 @@ export const useStore = create<AppState>((set) => ({
         citations: [],
         activeDocumentId: null,
         graphDepth: 1,
-        graphMode: 'basic',
+        graphMode: 'path',
         selectedNode: null,
         activePathNodeIds: [],
         learningPathNarration: null,
@@ -366,7 +366,7 @@ export const useStore = create<AppState>((set) => ({
         citations: sessionData?.citations || [],
         activeDocumentId: sessionData?.activeDocumentId || null,
         graphDepth: sessionData?.graphDepth || 1,
-        graphMode: sessionData?.graphMode || 'basic',
+        graphMode: sessionData?.graphMode || 'path',
         selectedNode: null,
         activePathNodeIds: [],
         learningPathNarration: null,
@@ -422,7 +422,7 @@ export const useStore = create<AppState>((set) => ({
           citations: sessionData?.citations || [],
           activeDocumentId: sessionData?.activeDocumentId || null,
           graphDepth: sessionData?.graphDepth || 1,
-          graphMode: sessionData?.graphMode || 'basic',
+          graphMode: sessionData?.graphMode || 'path',
           selectedNode: null,
           activePathNodeIds: [],
           learningPathNarration: null,
@@ -549,7 +549,7 @@ export const useStore = create<AppState>((set) => ({
     saveSessionLocal(state.sessionId, { graphDepth: depth });
     return { graphDepth: depth };
   }),
-  graphMode: 'basic',
+  graphMode: 'path',
   setGraphMode: (mode) => set((state) => {
     saveSessionLocal(state.sessionId, { graphMode: mode });
     return { graphMode: mode };

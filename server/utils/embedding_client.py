@@ -12,17 +12,7 @@ from server.config import config
 logger = logging.getLogger("embedding_client")
 
 
-_SEMANTIC_ALIASES = {
-    "voltage": ["potential", "difference", "electric", "potential"],
-    "potential": ["voltage", "electric"],
-    "difference": ["voltage"],
-    "neural": ["network", "net"],
-    "net": ["neural", "network"],
-    "network": ["neural", "net"],
-    "networks": ["neural", "network"],
-    "ai": ["artificial", "intelligence"],
-    "ml": ["machine", "learning"],
-}
+_SEMANTIC_ALIASES: dict[str, list[str]] = {}
 
 
 def cosine_similarity(a: Iterable[float], b: Iterable[float]) -> float:
@@ -55,8 +45,6 @@ class EmbeddingClient:
     @staticmethod
     def _tokens(text: str) -> list[str]:
         text = (text or "").lower()
-        text = text.replace("potential difference", "potential difference voltage")
-        text = text.replace("neural net", "neural network")
         raw = re.findall(r"[a-z0-9]+", text)
         tokens = []
         for token in raw:

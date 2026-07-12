@@ -2,8 +2,10 @@ node_modules
 web/node_modules
 api/node_modules
 api/venv
+api/utils
 server/__pycache__
 server/**/__pycache__
+server/scratch
 api/**/__pycache__
 
 .git

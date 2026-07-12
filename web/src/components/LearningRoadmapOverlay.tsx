@@ -94,34 +94,34 @@ export default function LearningRoadmapOverlay({
             {/* Content / Roadmap Steps */}
             <div className="flex-1 overflow-y-auto p-6 md:p-8 custom-scrollbar">
               {activeSubTopic ? (() => {
-                let finalDefinition = "Comprehensive educational guide and documentation for " + activeSubTopic.name;
-                let finalHowItWorks = "Understanding the core architecture, compilation rules, and runtime footprint of " + activeSubTopic.name + " in modern software frameworks.";
-                let finalFormula = "Syntax schema standard applied.";
-                let finalProperties = "• Foundational technical concept\n• Core development block";
+                let finalDefinition = localStudyGuide?.definition || activeSubTopic.description || `${activeSubTopic.name} is a concept extracted from your uploaded document.`;
+                let finalHowItWorks = localStudyGuide?.how_it_works || "Use the graph links around this node to understand how it fits into the document-local learning path.";
+                let finalFormula = localStudyGuide?.formula_syntax || "No formula or syntax was grounded for this concept yet.";
+                let finalProperties = localStudyGuide?.properties || "• Document-local concept\n• Dynamic roadmap step\n• Grounded by extracted graph context";
 
                 const currentName = activeSubTopic.name.toLowerCase();
 
-                if (currentName.includes('array')) {
+                if (false && currentName.includes('array')) {
                   finalDefinition = "An Array is a linear data structure that stores a collection of elements of the same data type in contiguous (sequential) memory locations.";
                   finalHowItWorks = "Since memory is sequential, the system uses a base pointer index calculation: Address = BaseAddress + (Index * ElementSize). This allows instant random access with an O(1) time complexity.";
                   finalFormula = "int[] arr = new int[5];\narr[0] = 10; // Zero-indexed access";
                   finalProperties = "• Contiguous memory allocation\n• Fixed capacity size constraint\n• Fast O(1) random lookup element retrieval";
-                } else if (currentName.includes('syntax') || currentName.includes('basic')) {
+                } else if (false && (currentName.includes('syntax') || currentName.includes('basic'))) {
                   finalDefinition = "Basic Programming Syntax defines the foundational structural laws, tokens, and rules for writing valid, compilable code statements in a language.";
                   finalHowItWorks = "The code parser and compiler scan tokens sequentially. If keywords, data types, brackets, or semicolons violate grammar constraints, the build logs break immediately.";
                   finalFormula = "public static void main(String[] args) {\n    System.out.println(\"Hello World\");\n}";
                   finalProperties = "• Enforces strict source code layout\n• Parsed directly by lexical analyzers\n• Eliminates structural runtime syntax bugs";
-                } else if (currentName.includes('java core') || currentName.includes('core java')) {
+                } else if (false && (currentName.includes('java core') || currentName.includes('core java'))) {
                   finalDefinition = "Java Core handles the foundational engine ecosystem of Java, managing bytecode instructions, object references, and execution thread contexts.";
                   finalHowItWorks = "Java source code is compiled down into architecture-neutral .class bytecode, which is then interpreted and executed line-by-line via the Java Virtual Machine (JVM).";
                   finalFormula = "Compile: javac App.java\nRun: java App";
                   finalProperties = "• Platform Independent (WORA architecture)\n• Automated background Garbage Collection\n• Strong Type Safety checks";
-                } else if (currentName.includes('voltage') || currentName.includes('potential')) {
+                } else if (false && (currentName.includes('voltage') || currentName.includes('potential'))) {
                   finalDefinition = "Voltage, or electric potential difference, is the pressure from an electrical circuit's power source that pushes charged electrons through a conducting loop.";
                   finalHowItWorks = "Think of it as water pressure in a pipe. Higher pressure forces more water to drift; similarly, higher voltage pushes a stronger flow of electrons to do real work.";
                   finalFormula = "V = I × R (Ohm's Law) or V = W / Q";
                   finalProperties = "• SI Unit: Volts (V)\n• Measured using an isolated Voltmeter";
-                } else if (currentName.includes('charge')) {
+                } else if (false && currentName.includes('charge')) {
                   finalDefinition = "Electric Charge is the physical property of atomic matter that causes it to experience an inward or outward force when placed within an electromagnetic field.";
                   finalHowItWorks = "Protons carry positive charges and electrons carry negative charges. Stationary charges generate electric fields, while moving charges generate magnetic fields.";
                   finalFormula = "Q = I × t (Current × Time) or Q = n × e";
