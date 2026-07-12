@@ -5,7 +5,7 @@
   "description": "MindMesh monorepo for Next.js web application and FastAPI backend.",
   "workspaces": ["web", "api"],
   "scripts": {
-    "dev": "turbo run dev",
+    "dev": "npx concurrently -n \"web,api\" -c \"cyan,magenta\" \"npm run dev:web\" \"npm run dev:api\"",
     "dev:legacy": "npx concurrently -n \"web,api\" -c \"cyan,magenta\" \"npm run dev:web\" \"npm run dev:api\"",
     "dev:web": "npm run dev --prefix web",
     "dev:api": "python -m uvicorn server.main:app --reload",

@@ -428,13 +428,13 @@ export default function GraphCanvas() {
         // Safely set many-body charge repulsion force if it exists
         const chargeForce = fg.d3Force('charge');
         if (chargeForce && typeof chargeForce.strength === 'function') {
-          chargeForce.strength(-400);
+          chargeForce.strength(-700);
         }
         
         // Safely set link distance force if it exists
         const linkForce = fg.d3Force('link');
         if (linkForce && typeof linkForce.distance === 'function') {
-          linkForce.distance(150);
+          linkForce.distance(220);
         }
         
         // Add safe collision detection force
@@ -443,9 +443,9 @@ export default function GraphCanvas() {
             const rawDegree = (nodeDegrees && node && node.id) ? (nodeDegrees[node.id] || 0) : 0;
             const degree = typeof rawDegree === 'number' && !isNaN(rawDegree) && rawDegree >= 0 ? rawDegree : 0;
             const radius = 3 + Math.sqrt(degree) * 1.5;
-            return radius + 75;
+            return radius + 100;
           } catch (e) {
-            return 80;
+            return 105;
           }
         });
         
@@ -805,15 +805,16 @@ export default function GraphCanvas() {
                 const maxLabelLength = 40;
                 const label = rawLabel.length > maxLabelLength ? rawLabel.slice(0, maxLabelLength) + '...' : rawLabel;
                 
-                // Fixed font size between 10-14px that scales properly with zoom
+                // Font size bounded 9-14px — prevents overwhelming text at zoom-out
                 const scale = typeof globalScale === 'number' && !isNaN(globalScale) && globalScale > 0 ? globalScale : 1;
-                const fontSize = Math.max(10, 21 / scale);
+                const fontSize = Math.min(14, Math.max(9, 12 / Math.sqrt(scale)));
                 const rawDegree = (nodeDegrees && node.id) ? (nodeDegrees[node.id] || 0) : 0;
                 const degree = typeof rawDegree === 'number' && !isNaN(rawDegree) && rawDegree >= 0 ? rawDegree : 0;
                 const radius = 4 + Math.sqrt(degree) * 1.8;
-                
+
                 const isSelected = selectedNode?.id === node.id;
-                const isPathNode = activePathNodeIds && activePathNodeIds.includes(node.id);
+                const isPathNode = !!(activePathNodeIds && activePathNodeIds.includes(node.id));
+                const shouldShowLabel = scale >= 0.55 || isSelected || isPathNode;
                 const color = getNodeColor(node.label);
 
                 // Tech ring/dashboard effect for Selected or Topic nodes
@@ -921,24 +922,17 @@ export default function GraphCanvas() {
                 ctx.stroke();
                 ctx.restore();
 
-                // Label text below node
-                ctx.font = `${fontSize}px Outfit, system-ui, sans-serif`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'top';
-                
-                // Draw background rectangle for text readability at high zoom
-                const textWidth = ctx.measureText(label).width;
-                ctx.fillStyle = 'rgba(3, 12, 11, 0.92)';
-                ctx.fillRect(
-                  x - textWidth / 2 - 3,
-                  y + radius + 2,
-                  textWidth + 6,
-                  fontSize + 2
-                );
-
-                // Draw text
-                ctx.fillStyle = isSelected || isPathNode ? '#ffffff' : '#cbd5e1';
-                ctx.fillText(label, x, y + radius + 3);
+                // Label text below node — only show when zoomed in, or for selected/path nodes
+                if (shouldShowLabel) {
+                  ctx.font = `${fontSize}px Outfit, system-ui, sans-serif`;
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'top';
+                  const textWidth = ctx.measureText(label).width;
+                  ctx.fillStyle = 'rgba(3, 12, 11, 0.92)';
+                  ctx.fillRect(x - textWidth / 2 - 3, y + radius + 2, textWidth + 6, fontSize + 2);
+                  ctx.fillStyle = isSelected || isPathNode ? '#ffffff' : '#cbd5e1';
+                  ctx.fillText(label, x, y + radius + 3);
+                }
               } catch (err) {
                 console.error("Failed to render custom node canvas shape:", err);
                 // Safe minimal fallback circle shape
