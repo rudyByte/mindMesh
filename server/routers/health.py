@@ -40,6 +40,7 @@ def get_deep_health():
         supabase_status = {"status": "error", "message": str(e)}
 
     # 3. LLM API Status (Anthropic preferred; Groq fallback). No secrets returned.
+    provider = "mock"
     try:
         if llm_client._is_mock:
             llm_status = {"status": "ok", "mode": "mock"}
@@ -54,7 +55,7 @@ def get_deep_health():
             )
             llm_status = {"status": "ok", "mode": "live", "provider": provider, "sample_ok": bool(content)}
     except Exception as e:
-        llm_status = {"status": "error", "message": str(e)}
+        llm_status = {"status": "error", "provider": provider, "message": str(e)}
 
     overall_ok = (
         neo4j_status["status"] == "ok" and 
