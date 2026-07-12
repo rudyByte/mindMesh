@@ -2175,7 +2175,7 @@ def get_document_graph(id: str, session_id: Optional[str] = Query(None)):
             if res and res[0].get("session_id") != session_id:
                 raise HTTPException(status_code=403, detail="Access denied. Document does not belong to this session.")
 
-    multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False)
+    multi_doc_mode = getattr(config, "MULTI_DOCUMENT_MODE", False) or (session_id is not None)
 
     if neo4j_client.is_mock():
         if not neo4j_client.mock_nodes:
