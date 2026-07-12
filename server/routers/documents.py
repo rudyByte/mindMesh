@@ -455,7 +455,7 @@ def cluster_and_merge_nodes(nodes: list) -> tuple[list, dict]:
             emb_sim = max(full_emb_sim, name_emb_sim)
             acronym_match = is_acronym_of(name, rep_node["name"]) or is_acronym_of(rep_node["name"], name)
             lexical_match = are_semantically_similar(name, rep_node["name"])
-            if acronym_match or (lexical_match and emb_sim >= threshold):
+            if acronym_match or emb_sim >= threshold or (lexical_match and emb_sim >= min(0.82, threshold)):
                 cluster.append(node)
                 matched = True
                 break

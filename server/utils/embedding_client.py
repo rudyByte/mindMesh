@@ -12,7 +12,19 @@ from server.config import config
 logger = logging.getLogger("embedding_client")
 
 
-_SEMANTIC_ALIASES: dict[str, list[str]] = {}
+_SEMANTIC_ALIASES: dict[str, list[str]] = {
+    # Local deterministic fallback needs a small, explicit synonym lexicon so
+    # entity resolution still works when no paid embedding key is configured.
+    # Remote embeddings remain preferred when available.
+    "voltage": ["potential", "difference", "electric", "potentialdifference"],
+    "potential": ["voltage", "electric"],
+    "difference": [],
+    "potentialdifference": ["voltage", "potential", "difference"],
+    "net": ["network"],
+    "nets": ["network"],
+    "network": ["net"],
+    "networks": ["network", "net"],
+}
 
 
 def cosine_similarity(a: Iterable[float], b: Iterable[float]) -> float:
