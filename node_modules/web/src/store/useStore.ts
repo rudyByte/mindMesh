@@ -9,6 +9,9 @@ export interface GraphNode {
   difficulty_level: string;
   x?: number;
   y?: number;
+  fx?: number;
+  fy?: number;
+  distance?: number;
   doc_id?: string;
   session_id?: string;
   year?: number | string;
@@ -67,8 +70,8 @@ interface AppState {
   setSelectedNode: (node: GraphNode | null) => void;
   graphDepth: number;
   setGraphDepth: (depth: number) => void;
-  graphMode: 'basic' | 'advanced';
-  setGraphMode: (mode: 'basic' | 'advanced') => void;
+  graphMode: 'basic' | 'advanced' | 'path';
+  setGraphMode: (mode: 'basic' | 'advanced' | 'path') => void;
   setGraphData: (data: GraphData) => void;
   appendGraphData: (data: GraphData) => void;
   graphFilter: string | null;

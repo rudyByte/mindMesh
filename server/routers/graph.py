@@ -16,6 +16,179 @@ def get_primary_label(labels_list) -> str:
             return lbl
     return "Concept"
 
+
+def _mock_node_payload(node_id: str, distance: int = 0) -> dict:
+    n = neo4j_client.mock_nodes.get(node_id) or {}
+    return {
+        "id": node_id,
+        "label": n.get("label", "Concept"),
+        "name": n.get("name") or n.get("title") or "Unknown",
+        "description": n.get("description", ""),
+        "difficulty_level": n.get("difficulty_level", "Beginner"),
+        "level": n.get("level"),
+        "distance": distance,
+    }
+
+
+@router.get("/graph/hierarchy")
+def get_focused_hierarchy(
+    focus: str = Query(..., description="Focused node id"),
+    up: int = Query(2, ge=1, le=6, description="Prerequisite hops above focus"),
+    down: int = Query(2, ge=1, le=6, description="Extension/application hops below focus"),
+    session_id: Optional[str] = Query(None, description="Session ID to validate ownership"),
+    document_id: Optional[str] = Query(None, description="Document ID to validate ownership")
+):
+    """Return focused DAG buckets for Path View: prerequisites -> target -> extensions/apps."""
+    if neo4j_client.is_mock():
+        target = neo4j_client.mock_nodes.get(focus)
+        if not target:
+            raise HTTPException(status_code=404, detail="Target node not found.")
+        if session_id and target.get("session_id") != session_id:
+            raise HTTPException(status_code=403, detail="Access denied.")
+
+        def walk(reverse: bool, types: set[str], max_depth: int) -> list[dict]:
+            results = []
+            seen = {focus}
+            frontier = [(focus, 0)]
+            while frontier:
+                current, depth = frontier.pop(0)
+                if depth >= max_depth:
+                    continue
+                for edge in neo4j_client.mock_edges:
+                    if edge.get("type") not in types:
+                        continue
+                    src, dst = edge.get("from"), edge.get("to")
+                    match = dst == current if reverse else src == current
+                    nxt = src if reverse else dst
+                    if not match or not nxt or nxt in seen:
+                        continue
+                    node = neo4j_client.mock_nodes.get(nxt)
+                    if not node:
+                        continue
+                    if session_id and node.get("session_id") != session_id:
+                        continue
+                    seen.add(nxt)
+                    distance = depth + 1
+                    results.append(_mock_node_payload(nxt, distance))
+                    frontier.append((nxt, distance))
+            return sorted(results, key=lambda item: (-item["distance"], item["name"])) if reverse else sorted(results, key=lambda item: (item["distance"], item["name"]))
+
+        prerequisites = walk(True, {"PREREQUISITE_OF", "PREREQUISITE", "DEPENDS_ON"}, up)
+        extensions = walk(False, {"EXTENDS", "PART_OF"}, down)
+        applications = walk(False, {"USED_FOR", "USES", "EVALUATED_ON"}, down)
+        related = []
+        related_seen = {n["id"] for n in prerequisites + extensions + applications} | {focus}
+        for edge in neo4j_client.mock_edges:
+            if edge.get("type") != "RELATED_TO":
+                continue
+            nxt = None
+            if edge.get("from") == focus:
+                nxt = edge.get("to")
+            elif edge.get("to") == focus:
+                nxt = edge.get("from")
+            if not nxt or nxt in related_seen:
+                continue
+            node = neo4j_client.mock_nodes.get(nxt)
+            if node and (not session_id or node.get("session_id") == session_id):
+                related_seen.add(nxt)
+                related.append(_mock_node_payload(nxt, 1))
+
+        return {
+            "prerequisites": prerequisites,
+            "target": _mock_node_payload(focus, 0),
+            "extensions": extensions,
+            "applications": applications,
+            "related": related,
+        }
+
+    scope_match = "target.session_id = $session_id" if session_id else "($doc_id IS NULL OR EXISTS { MATCH (:Document {id: $doc_id})-[:CONTAINS]->(target) })"
+    target_res = neo4j_client.run_query(
+        f"""
+        MATCH (target {{id: $focus}})
+        WHERE {scope_match}
+        RETURN target.id as id, labels(target) as labels, coalesce(target.name, target.title, 'Unknown') as name,
+               coalesce(target.description, '') as description, coalesce(target.difficulty_level, 'Beginner') as difficulty_level,
+               target.level as level
+        """,
+        {"focus": focus, "session_id": session_id, "doc_id": document_id}
+    )
+    if not target_res:
+        exists = neo4j_client.run_query("MATCH (n {id: $focus}) RETURN n.id as id", {"focus": focus})
+        if exists:
+            raise HTTPException(status_code=403, detail="Access denied.")
+        raise HTTPException(status_code=404, detail="Target node not found.")
+
+    def row_to_node(row: dict, distance: int | None = None) -> dict:
+        return {
+            "id": row.get("id"),
+            "label": get_primary_label(row.get("labels")),
+            "name": row.get("name") or "Unknown",
+            "description": row.get("description") or "",
+            "difficulty_level": row.get("difficulty_level") or "Beginner",
+            "level": row.get("level"),
+            "distance": row.get("distance", distance or 0),
+        }
+
+    scope_node = "ALL(x IN nodes(p) WHERE x.session_id = $session_id)" if session_id else "($doc_id IS NULL OR ALL(x IN nodes(p) WHERE EXISTS { MATCH (:Document {id: $doc_id})-[:CONTAINS]->(x) }))"
+    params = {"focus": focus, "up": up, "down": down, "session_id": session_id, "doc_id": document_id}
+
+    prereq_res = neo4j_client.run_query(
+        f"""
+        MATCH p=(n)-[:PREREQUISITE_OF|DEPENDS_ON*1..$up]->(target {{id: $focus}})
+        WHERE {scope_node}
+        WITH n, min(length(p)) as distance
+        RETURN n.id as id, labels(n) as labels, coalesce(n.name, n.title, 'Unknown') as name,
+               coalesce(n.description, '') as description, coalesce(n.difficulty_level, 'Beginner') as difficulty_level,
+               n.level as level, distance
+        ORDER BY distance DESC, name
+        """,
+        params
+    )
+    ext_res = neo4j_client.run_query(
+        f"""
+        MATCH p=(target {{id: $focus}})-[:EXTENDS|PART_OF*1..$down]->(n)
+        WHERE {scope_node}
+        WITH n, min(length(p)) as distance
+        RETURN n.id as id, labels(n) as labels, coalesce(n.name, n.title, 'Unknown') as name,
+               coalesce(n.description, '') as description, coalesce(n.difficulty_level, 'Beginner') as difficulty_level,
+               n.level as level, distance
+        ORDER BY distance ASC, name
+        """,
+        params
+    )
+    app_res = neo4j_client.run_query(
+        f"""
+        MATCH p=(target {{id: $focus}})-[:USED_FOR|USES|EVALUATED_ON*1..$down]->(n)
+        WHERE {scope_node}
+        WITH n, min(length(p)) as distance
+        RETURN n.id as id, labels(n) as labels, coalesce(n.name, n.title, 'Unknown') as name,
+               coalesce(n.description, '') as description, coalesce(n.difficulty_level, 'Beginner') as difficulty_level,
+               n.level as level, distance
+        ORDER BY distance ASC, name
+        """,
+        params
+    )
+    related_res = neo4j_client.run_query(
+        f"""
+        MATCH (target {{id: $focus}})-[:RELATED_TO]-(n)
+        WHERE {('n.session_id = $session_id' if session_id else '($doc_id IS NULL OR EXISTS { MATCH (:Document {id: $doc_id})-[:CONTAINS]->(n) })')}
+        RETURN n.id as id, labels(n) as labels, coalesce(n.name, n.title, 'Unknown') as name,
+               coalesce(n.description, '') as description, coalesce(n.difficulty_level, 'Beginner') as difficulty_level,
+               n.level as level, 1 as distance
+        ORDER BY name
+        LIMIT 40
+        """,
+        params
+    )
+
+    return {
+        "prerequisites": [row_to_node(r) for r in prereq_res],
+        "target": row_to_node(target_res[0]),
+        "extensions": [row_to_node(r) for r in ext_res],
+        "applications": [row_to_node(r) for r in app_res],
+        "related": [row_to_node(r) for r in related_res],
+    }
+
 @router.get("/graph/node/{id}")
 def get_node_details(
     id: str, 

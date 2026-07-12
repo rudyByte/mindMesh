@@ -156,6 +156,8 @@ export default function GraphCanvas() {
       difficulty_level: n.difficulty_level || 'Beginner',
       x: typeof (n as any).x === 'number' && !isNaN((n as any).x) ? (n as any).x : undefined,
       y: typeof (n as any).y === 'number' && !isNaN((n as any).y) ? (n as any).y : undefined,
+      fx: typeof (n as any).fx === 'number' && !isNaN((n as any).fx) ? (n as any).fx : undefined,
+      fy: typeof (n as any).fy === 'number' && !isNaN((n as any).fy) ? (n as any).fy : undefined,
     }));
 
     const validNodeIds = new Set(validNodes.map(n => n.id));
@@ -202,17 +204,47 @@ export default function GraphCanvas() {
       setLoading(true);
       setCanvasError(null);
       try {
-        const scope = `document_id=${encodeURIComponent(activeDocumentId || '')}`;
-        const response = await fetch(
-          `${API_BASE_URL}/graph/expand?node_id=${encodeURIComponent(selectedNodeId)}&depth=${graphDepth}&mode=${graphMode}&${scope}`,
-          { signal: controller.signal }
-        );
+        const scope = sessionId
+          ? `session_id=${encodeURIComponent(sessionId)}`
+          : `document_id=${encodeURIComponent(activeDocumentId || '')}`;
+        const url = graphMode === 'path'
+          ? `${API_BASE_URL}/graph/hierarchy?focus=${encodeURIComponent(selectedNodeId)}&up=${graphDepth}&down=${Math.max(1, graphDepth)}&${scope}`
+          : `${API_BASE_URL}/graph/expand?node_id=${encodeURIComponent(selectedNodeId)}&depth=${graphDepth}&mode=${graphMode}&${scope}`;
+        const response = await fetch(url, { signal: controller.signal });
         if (!response.ok) throw new Error(`Traversal failed (HTTP ${response.status})`);
         const data = await response.json();
-        setGraphData({
-          nodes: Array.isArray(data.nodes) ? data.nodes : [],
-          edges: Array.isArray(data.edges) ? data.edges : [],
-        });
+        if (graphMode === 'path') {
+          const prereqs = Array.isArray(data.prerequisites) ? data.prerequisites : [];
+          const extensions = Array.isArray(data.extensions) ? data.extensions : [];
+          const applications = Array.isArray(data.applications) ? data.applications : [];
+          const related = Array.isArray(data.related) ? data.related : [];
+          const target = data.target;
+
+          const positionTier = (items: any[], y: number, xOffset = 0) => items.map((item, idx) => {
+            const count = Math.max(1, items.length);
+            const x = xOffset + (idx - (count - 1) / 2) * 180;
+            return { ...item, x, y, fx: x, fy: y };
+          });
+
+          const prereqNodes = positionTier(prereqs, -220, 0);
+          const extensionNodes = positionTier(extensions, 210, -120);
+          const appNodes = positionTier(applications, 340, 120);
+          const relatedNodes = positionTier(related, 20, 360);
+          const targetNode = target ? { ...target, x: 0, y: 0, fx: 0, fy: 0 } : null;
+          const pathNodes = [...prereqNodes, ...(targetNode ? [targetNode] : []), ...extensionNodes, ...appNodes, ...relatedNodes];
+          const pathEdges = [
+            ...prereqNodes.map((n: any) => ({ from: n.id, to: selectedNodeId, type: 'PREREQUISITE_OF' })),
+            ...extensionNodes.map((n: any) => ({ from: selectedNodeId, to: n.id, type: 'EXTENDS' })),
+            ...appNodes.map((n: any) => ({ from: selectedNodeId, to: n.id, type: 'USED_FOR' })),
+            ...relatedNodes.map((n: any) => ({ from: selectedNodeId, to: n.id, type: 'RELATED_TO' })),
+          ];
+          setGraphData({ nodes: pathNodes, edges: pathEdges });
+        } else {
+          setGraphData({
+            nodes: Array.isArray(data.nodes) ? data.nodes : [],
+            edges: Array.isArray(data.edges) ? data.edges : [],
+          });
+        }
         shouldZoomToFit.current = true;
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return;
@@ -224,7 +256,7 @@ export default function GraphCanvas() {
 
     expandSelectedNode();
     return () => controller.abort();
-  }, [selectedNodeId, graphDepth, graphMode, activeDocumentId, setGraphData]);
+  }, [selectedNodeId, graphDepth, graphMode, activeDocumentId, sessionId, setGraphData]);
 
   // Focus/zoom camera when selectedNode changes
   useEffect(() => {
@@ -438,7 +470,10 @@ export default function GraphCanvas() {
       if (node.id.startsWith('llm-req-')) return;
       
       // Fetch full details of the clicked node
-      const detailsUrl = `${API_BASE_URL}/graph/node/${node.id}?document_id=${activeDocumentId || 'doc-1'}`;
+      const detailsScope = sessionId
+        ? `session_id=${encodeURIComponent(sessionId)}`
+        : `document_id=${encodeURIComponent(activeDocumentId || 'doc-1')}`;
+      const detailsUrl = `${API_BASE_URL}/graph/node/${node.id}?${detailsScope}`;
       const detailsRes = await fetch(detailsUrl);
       if (detailsRes.ok) {
         const detailsData = await detailsRes.json();
@@ -466,6 +501,34 @@ export default function GraphCanvas() {
       {/* Ambient Glowing Backlights behind densest clusters */}
       <div className="ambient-glow-cyan top-1/4 left-1/4 animate-pulse duration-[8000ms] opacity-50" />
       <div className="ambient-glow-violet bottom-1/3 right-1/3 animate-pulse duration-[12000ms] opacity-40" />
+
+      {/* Map / Path View switch */}
+      {selectedNodeId && (
+        <div className="absolute top-4 left-4 z-20 flex items-center gap-2 bg-[#031412]/95 backdrop-blur-lg border border-cyan-500/20 px-2 py-2 rounded-xl shadow-[0_0_18px_rgba(6,182,212,0.08)]">
+          <button
+            onClick={() => setGraphMode('advanced')}
+            data-active={graphMode !== 'path'}
+            className="px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider border border-cyan-500/20 text-cyan-200 data-[active=true]:bg-cyan-500/15 data-[active=true]:border-cyan-400/60"
+          >
+            Map View
+          </button>
+          <button
+            onClick={() => setGraphMode('path')}
+            data-active={graphMode === 'path'}
+            className="px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider border border-emerald-500/20 text-emerald-200 data-[active=true]:bg-emerald-500/15 data-[active=true]:border-emerald-400/60"
+          >
+            Path View
+          </button>
+          {graphMode === 'path' && (
+            <button
+              onClick={() => setGraphDepth(Math.min(6, graphDepth + 1))}
+              className="px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider border border-amber-500/25 text-amber-200 hover:bg-amber-500/10"
+            >
+              I don&apos;t know this ↑
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Loading Overlay */}
       {loading && (
@@ -563,6 +626,7 @@ export default function GraphCanvas() {
             }}
             linkCurvature={0.25}
             linkDirectionalArrowLength={6}
+            cooldownTicks={graphMode === 'path' ? 0 : 120}
             linkDirectionalArrowRelPos={1}
             linkDirectionalParticles={(link: any) => {
               try {
