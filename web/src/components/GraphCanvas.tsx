@@ -95,6 +95,13 @@ export default function GraphCanvas() {
   const [edgeTypeFilter, setEdgeTypeFilter] = useState<string | null>(null);
   const [showMiniMap, setShowMiniMap] = useState(true);
 
+  // Simulation tick state & stable refs to prevent reset during react renders
+  const [tick, setTick] = useState(0);
+  const d3NodesRef = useRef<any[]>([]);
+  const d3LinksRef = useRef<any[]>([]);
+  const prevFilteredNodesRef = useRef<any[]>([]);
+  const prevFilteredEdgesRef = useRef<any[]>([]);
+
   // Store state
   const nodes = useStore((state) => state.nodes);
   const edges = useStore((state) => state.edges);
@@ -194,43 +201,102 @@ export default function GraphCanvas() {
     return { nodes: validNodes, links: validLinks };
   }, [filteredNodes, filteredEdges]);
 
-  // ── Pre-assign tier-based x/y so nodes START in the right row ──────────
-  // ForceGraph2D uses these as initial positions before the simulation runs.
-  // This guarantees the hierarchical shape even before forces converge.
-  const hierarchicalNodes = React.useMemo(() => {
-    const TIER: Record<string, number> = {
-      Topic: 0, Concept: 1, Method: 2, Dataset: 2, Paper: 2, Author: 3, Keyword: 3,
-    };
-    const NUM_TIERS = 4;
-    const W = dimensions.width  || 900;
+  // ── Preserve Simulated Positions & Calculate DAG Levels ──────────────────
+  // We use an iterative DAG levelling algorithm to assign topological depths.
+  // Topics sit at level 0, concept nodes with no prereqs at level 1, concepts
+  // with prerequisites are pushed to levels 2, 3, etc. based on longest path.
+  if (filteredNodes !== prevFilteredNodesRef.current || filteredEdges !== prevFilteredEdgesRef.current) {
+    prevFilteredNodesRef.current = filteredNodes;
+    prevFilteredEdgesRef.current = filteredEdges;
+
+    const levels: Record<string, number> = {};
+    filteredNodes.forEach(n => {
+      if (n.label === 'Topic') levels[n.id] = 0;
+      else if (n.label === 'Concept') levels[n.id] = 1;
+      else if (n.label === 'Paper' || n.label === 'Method' || n.label === 'Dataset') levels[n.id] = 2;
+      else levels[n.id] = 3;
+    });
+
+    // Relax levels iteratively based on directed relationship directions
+    for (let iter = 0; iter < 12; iter++) {
+      let changed = false;
+      filteredEdges.forEach(l => {
+        const fromId = typeof l.source === 'object' && l.source !== null ? (l.source as any).id : l.source || l.from;
+        const toId = typeof l.target === 'object' && l.target !== null ? (l.target as any).id : l.target || l.to;
+        if (!fromId || !toId || levels[fromId] === undefined || levels[toId] === undefined) return;
+
+        // Prerequisite rules: prerequisite (from) is above target (to)
+        if (l.type === 'PREREQUISITE_OF' || l.type === 'PREREQUISITE') {
+          if (levels[toId] < levels[fromId] + 1) {
+            levels[toId] = levels[fromId] + 1;
+            changed = true;
+          }
+        }
+        // Extends rules: general concept (to) is above specific concept (from)
+        if (l.type === 'EXTENDS') {
+          if (levels[fromId] < levels[toId] + 1) {
+            levels[fromId] = levels[toId] + 1;
+            changed = true;
+          }
+        }
+        // Used_for rules: fundamental method (from) is above application (to)
+        if (l.type === 'USED_FOR') {
+          if (levels[toId] < levels[fromId] + 1) {
+            levels[toId] = levels[fromId] + 1;
+            changed = true;
+          }
+        }
+      });
+      if (!changed) break;
+    }
+
+    const maxLevel = Math.max(1, ...Object.values(levels));
+    const W = dimensions.width || 800;
     const H = dimensions.height || 600;
-    const ySpan = H * 0.75;
+    const ySpan = H * 0.72;
     const yStart = -ySpan / 2;
-    const yStep  = ySpan / (NUM_TIERS - 1);
+    const yStep = ySpan / maxLevel;
 
-    // Group node indices by tier to compute x spacing
-    const tierNodes: Record<number, any[]> = {};
-    for (let t = 0; t < NUM_TIERS; t++) tierNodes[t] = [];
-    validatedGraphData.nodes.forEach((n: any) => {
-      const tier = TIER[n.label] ?? 1;
-      tierNodes[tier].push(n);
+    // Group nodes by level to compute horizontal spacing
+    const levelGroups: Record<number, any[]> = {};
+    for (let l = 0; l <= maxLevel; l++) levelGroups[l] = [];
+    filteredNodes.forEach(n => {
+      const lvl = levels[n.id] ?? 1;
+      levelGroups[lvl].push(n);
     });
 
-    return validatedGraphData.nodes.map((n: any) => {
-      // Only inject position if node has no existing fixed position
-      if (n.fx != null || n.fy != null) return { ...n };
-      const tier  = TIER[n.label] ?? 1;
-      const peers = tierNodes[tier];
-      const idx   = peers.indexOf(n);
+    // Populate stable ref nodes preserving existing simulated positions
+    d3NodesRef.current = filteredNodes.map(n => {
+      const lvl = levels[n.id] ?? 1;
+      const peers = levelGroups[lvl];
+      const idx = peers.indexOf(n);
       const count = Math.max(1, peers.length);
-      const xRange = Math.min(W * 0.80, count * 140);
-      const x = count === 1
-        ? 0
-        : -xRange / 2 + (idx / (count - 1)) * xRange;
-      const y = yStart + tier * yStep;
-      return { ...n, x, y };
+      const xRange = Math.min(W * 0.85, count * 150);
+      const x = count === 1 ? 0 : -xRange / 2 + (idx / (count - 1)) * xRange;
+      const y = yStart + lvl * yStep;
+
+      const existing = d3NodesRef.current.find(prev => prev.id === n.id);
+      return {
+        ...n,
+        x: existing?.x ?? x,
+        y: existing?.y ?? y,
+        vx: existing?.vx ?? 0,
+        vy: existing?.vy ?? 0,
+        level: lvl
+      };
     });
-  }, [validatedGraphData.nodes, dimensions]);
+
+    // Populate stable ref links
+    d3LinksRef.current = filteredEdges.map(e => {
+      const fromId = typeof e.source === 'object' && e.source !== null ? (e.source as any).id : e.source || e.from;
+      const toId = typeof e.target === 'object' && e.target !== null ? (e.target as any).id : e.target || e.to;
+      return {
+        source: fromId,
+        target: toId,
+        type: e.type || 'RELATED_TO'
+      };
+    });
+  }
 
   // Set zoom to fit flag when nodes are loaded or active document changes
   useEffect(() => {
@@ -437,12 +503,11 @@ export default function GraphCanvas() {
   };
 
   const minimapNodes = React.useMemo(() => {
-    const positioned = validatedGraphData.nodes
-      .map((node: any) => ({
-        node,
-        x: typeof node.x === 'number' ? node.x : (typeof node.fx === 'number' ? node.fx : 0),
-        y: typeof node.y === 'number' ? node.y : (typeof node.fy === 'number' ? node.fy : 0),
-      }));
+    const positioned = d3NodesRef.current.map((node: any) => ({
+      node,
+      x: typeof node.x === 'number' ? node.x : 0,
+      y: typeof node.y === 'number' ? node.y : 0,
+    }));
     if (!positioned.length) return [];
     const minX = Math.min(...positioned.map(p => p.x));
     const maxX = Math.max(...positioned.map(p => p.x));
@@ -455,76 +520,70 @@ export default function GraphCanvas() {
       x: 10 + ((p.x - minX) / width) * 140,
       y: 10 + ((p.y - minY) / height) * 90,
     }));
-  }, [validatedGraphData.nodes]);
+  }, [tick]);
 
   // ── Hierarchical layout via D3 forces ────────────────────────────────────
   useEffect(() => {
-    if (!fgRef.current) return;
+    if (!fgRef.current || !d3NodesRef.current.length) return;
     try {
       const fg = fgRef.current;
       const canvasHeight = dimensions.height || 600;
       const canvasWidth  = dimensions.width  || 800;
 
-      const TIER: Record<string, number> = {
-        Topic: 0, Concept: 1, Method: 2, Dataset: 2, Paper: 2, Author: 3, Keyword: 3,
-      };
-      const NUM_TIERS = 4;
-      const ySpan  = canvasHeight * 0.78;
+      const maxLevel = Math.max(1, ...d3NodesRef.current.map(n => n.level ?? 1));
+      const ySpan  = canvasHeight * 0.76;
       const yStart = -ySpan / 2;
-      const yStep  = ySpan / (NUM_TIERS - 1);
-      const tierY  = (tier: number) => yStart + tier * yStep;
+      const yStep  = ySpan / maxLevel;
+      const levelY  = (level: number) => yStart + level * yStep;
 
-      // Build tier groups for X distribution
-      const tierGroups: Record<number, string[]> = {};
-      for (let t = 0; t < NUM_TIERS; t++) tierGroups[t] = [];
-      (filteredNodes as any[]).forEach((n: any) => {
-        const tier = TIER[n.label] ?? 1;
-        tierGroups[tier].push(n.id);
+      // Group node IDs by level for X distribution
+      const levelGroups: Record<number, string[]> = {};
+      for (let l = 0; l <= maxLevel; l++) levelGroups[l] = [];
+      d3NodesRef.current.forEach((n: any) => {
+        const lvl = n.level ?? 1;
+        levelGroups[lvl].push(n.id);
       });
 
-      // ❶ Kill the default center force — this is what collapses nodes into a lens
+      // ❶ Kill center force
       fg.d3Force('center', null);
 
       // ❷ Moderate charge repulsion
       const chargeForce = fg.d3Force('charge');
       if (chargeForce && typeof chargeForce.strength === 'function') {
-        chargeForce.strength(-350);
+        chargeForce.strength(-380);
       }
 
-      // ❸ Link distance — shorter within same tier, longer across
+      // ❸ Link distance
       const linkForce = fg.d3Force('link');
       if (linkForce && typeof linkForce.distance === 'function') {
         linkForce.distance((link: any) => {
           try {
             const srcId = typeof link.source === 'object' ? link.source?.id : link.source;
             const tgtId = typeof link.target === 'object' ? link.target?.id : link.target;
-            const srcNode = (filteredNodes as any[]).find((n: any) => n.id === srcId);
-            const tgtNode = (filteredNodes as any[]).find((n: any) => n.id === tgtId);
-            const srcTier = TIER[srcNode?.label] ?? 1;
-            const tgtTier = TIER[tgtNode?.label] ?? 1;
-            return srcTier === tgtTier ? 150 : 200;
-          } catch { return 180; }
+            const srcNode = d3NodesRef.current.find((n: any) => n.id === srcId);
+            const tgtNode = d3NodesRef.current.find((n: any) => n.id === tgtId);
+            return (srcNode?.level === tgtNode?.level) ? 140 : 200;
+          } catch { return 170; }
         });
       }
 
-      // ❹ Strong forceY — locks each node to its tier's Y band
+      // ❹ Strong forceY — locks each node to its computed DAG level Y
       fg.d3Force('y', forceY((node: any) => {
-        const tier = TIER[node.label] ?? 1;
-        return tierY(tier);
-      }).strength(0.8));
+        return levelY(node.level ?? 1);
+      }).strength(0.9));
 
-      // ❺ forceX — distributes nodes evenly across canvas width per tier
+      // ❺ forceX — distributes nodes evenly across canvas width per level
       fg.d3Force('x', forceX((node: any) => {
-        const tier = TIER[node.label] ?? 1;
-        const siblings = tierGroups[tier];
+        const lvl = node.level ?? 1;
+        const siblings = levelGroups[lvl];
         const idx   = siblings.indexOf(node.id);
         const count = Math.max(1, siblings.length);
-        const xRange = Math.min(canvasWidth * 0.85, count * 160);
+        const xRange = Math.min(canvasWidth * 0.88, count * 160);
         if (count === 1) return 0;
         return -xRange / 2 + (idx / (count - 1)) * xRange;
-      }).strength(0.5));
+      }).strength(0.55));
 
-      // ❻ Collision — prevent nodes from touching
+      // ❻ Collision
       const collideForce = forceCollide((node: any) => {
         try {
           const rawDegree = (nodeDegrees && node && node.id) ? (nodeDegrees[node.id] || 0) : 0;
@@ -797,10 +856,11 @@ export default function GraphCanvas() {
             width={graphWidth}
             height={graphHeight}
             graphData={{
-              nodes: hierarchicalNodes.map((n: any) => ({ ...n })),
-              links: validatedGraphData.links.map(l => ({ ...l }))
+              nodes: d3NodesRef.current,
+              links: d3LinksRef.current
             }}
             nodeId="id"
+            onEngineTick={() => setTick(t => t + 1)}
             nodeVal={(node: any) => {
               try {
                 if (!node) return 3;
