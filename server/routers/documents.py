@@ -550,6 +550,8 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
         "increase", "desired", "distance", "represented", "schematically", "shown", "suppose",
         "given", "same", "very", "small", "large", "low", "high", "materials", "assembly",
         "operation", "procedure", "objectives", "background", "turn", "plug", "unplug",
+        "absorbs", "absorb", "split", "splits", "fixes", "fix", "produce", "produces",
+        "regulate", "regulates", "compare", "compares", "explain", "explains",
     }
     stop = {
         "abstract", "introduction", "conclusion", "references", "figure", "table", "chapter", "section",
@@ -589,26 +591,41 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
 
     canonical_names = {canonical for _, canonical in canonical_patterns}
     phrase_counts: dict[str, int] = {}
+
+    def add_candidate(raw: str, weight: int = 1):
+        name = normalize_and_clean_concept_name(raw)
+        name = canonicalize_candidate(name)
+        if not name or len(name) > 40 or len(name.split()) > 4:
+            return
+        if _concept_identity_key(name) == _concept_identity_key(topic_name):
+            return
+        low = name.lower()
+        if low in stop or any(w in stop for w in low.split()):
+            return
+        if re.search(r"\b(using|attach|connect|record|observe|calculate|step|last|next)\b", low):
+            return
+        if len(name.split()) == 1 and low.endswith(("ing", "ed")):
+            return
+        if calculate_entity_quality(name, "Concept") <= 0.7:
+            return
+        phrase_counts[name] = phrase_counts.get(name, 0) + weight
+
     for pattern in [
         r"\b[A-Z][A-Za-z][A-Za-z'’/-]*(?:\s+[A-Z][A-Za-z][A-Za-z'’/-]*){0,3}\b",
         r"\b[a-z][a-z]{3,}(?:\s+[a-z][a-z]{3,}){1,3}\b",
+        r"\b[A-Z]{2,8}\b",
     ]:
         for raw in re.findall(pattern, text):
-            name = normalize_and_clean_concept_name(raw)
-            name = canonicalize_candidate(name)
-            if not name or len(name) > 40 or len(name.split()) > 4:
-                continue
-            low = name.lower()
-            if low in stop or any(w in stop for w in low.split()):
-                continue
-            if re.search(r"\b(using|attach|connect|record|observe|calculate|step|last|next)\b", low):
-                continue
-            if len(name.split()) == 1 and low.endswith(("ing", "ed")):
-                continue
-            if calculate_entity_quality(name, "Concept") <= 0.7:
-                continue
-            weight = 4 if name in canonical_names else 1
-            phrase_counts[name] = phrase_counts.get(name, 0) + weight
+            candidate_name = canonicalize_candidate(normalize_and_clean_concept_name(raw))
+            weight = 4 if candidate_name in canonical_names else 1
+            add_candidate(raw, weight)
+
+    subject_verbs = r"absorbs?|splits?|fix(?:es)?|produces?|regulates?|measures?|explains?|causes?|requires?|uses?"
+    for raw in re.findall(rf"\b([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){{0,2}})\s+(?:{subject_verbs})\b", text):
+        add_candidate(raw, 3)
+
+    for raw in re.findall(r"\b(?:in|inside|within|into)\s+([A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z][A-Za-z0-9-]*){0,2})\b", text, flags=re.IGNORECASE):
+        add_candidate(raw, 2)
 
     ranked_all = sorted(phrase_counts.items(), key=lambda item: (item[1], len(item[0])), reverse=True)
     canonical_ranked = [item for item in ranked_all if item[0] in canonical_names]

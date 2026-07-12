@@ -270,7 +270,9 @@ def singularize_concept_name(name: str) -> str:
     elif n_lower.endswith('es') and not n_lower.endswith('see'):
         if n_lower.endswith('ices'):
             return n[:-4] + 'ex'
-        return n[:-2]
+        if re.search(r'(ses|xes|zes|ches|shes)$', n_lower):
+            return n[:-2]
+        return n[:-1]
     elif n_lower.endswith('s') and not n_lower.endswith('ss') and not n_lower.endswith('us') and not n_lower.endswith('is'):
         return n[:-1]
     return n
