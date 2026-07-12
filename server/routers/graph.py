@@ -23,6 +23,30 @@ class EdgeDeleteRequest(BaseModel):
     type: str
     session_id: Optional[str] = None
 
+
+class EdgeRetypeRequest(EdgeDeleteRequest):
+    new_type: str
+
+
+class NodeMergeRequest(BaseModel):
+    keep_id: str
+    merge_id: str
+    session_id: Optional[str] = None
+
+
+ALLOWED_EDGE_TYPES = {
+    "PREREQUISITE_OF", "RELATED_TO", "EXTENDS", "CITES", "CONTAINS", "PART_OF",
+    "USES", "USED_FOR", "EVALUATED_ON", "AUTHORED_BY", "HAS_KEYWORD", "MENTIONS",
+    "DEPENDS_ON", "CAUSES",
+}
+
+
+def _clean_rel_type(rel_type: str) -> str:
+    cleaned = re.sub(r"[^A-Z_]", "", (rel_type or "").upper())
+    if cleaned not in ALLOWED_EDGE_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported edge type.")
+    return cleaned
+
 def get_primary_label(labels_list) -> str:
     if not labels_list:
         return "Concept"
@@ -183,9 +207,7 @@ def correct_graph_node(node_id: str, payload: NodeCorrectionRequest):
 @router.delete("/graph/edge")
 def delete_graph_edge(payload: EdgeDeleteRequest):
     """Manual graph correction: remove one wrong relationship edge."""
-    rel_type = re.sub(r"[^A-Z_]", "", (payload.type or "").upper())
-    if not rel_type:
-        raise HTTPException(status_code=400, detail="Invalid edge type.")
+    rel_type = _clean_rel_type(payload.type)
 
     if neo4j_client.is_mock():
         before = len(neo4j_client.mock_edges)
@@ -227,6 +249,149 @@ def delete_graph_edge(payload: EdgeDeleteRequest):
         },
     )
     return {"status": "success", "deleted": result[0].get("deleted", 0) if result else 0}
+
+
+@router.patch("/graph/edge")
+def retype_graph_edge(payload: EdgeRetypeRequest):
+    """Manual graph correction: change a relationship type."""
+    old_type = _clean_rel_type(payload.type)
+    new_type = _clean_rel_type(payload.new_type)
+    if old_type == new_type:
+        return {"status": "success", "changed": 0}
+
+    if neo4j_client.is_mock():
+        changed = 0
+        for e in neo4j_client.mock_edges:
+            if (
+                e.get("from") == payload.from_id
+                and e.get("to") == payload.to_id
+                and e.get("type") == old_type
+                and (not payload.session_id or e.get("session_id") == payload.session_id)
+            ):
+                e["type"] = new_type
+                changed += 1
+        persisted = _load_persisted_session_graph(payload.session_id)
+        if persisted:
+            for e in persisted.get("edges", []):
+                if (
+                    (e.get("from") or e.get("source")) == payload.from_id
+                    and (e.get("to") or e.get("target")) == payload.to_id
+                    and e.get("type") == old_type
+                ):
+                    e["type"] = new_type
+                    changed += 1
+            _save_persisted_session_graph(payload.session_id, persisted)
+        return {"status": "success", "changed": changed}
+
+    scope = "AND r.session_id = $session_id" if payload.session_id else ""
+    result = neo4j_client.run_query(
+        f"""
+        MATCH (a {{id: $from_id}})-[r:{old_type}]->(b {{id: $to_id}})
+        WHERE true {scope}
+        WITH a, b, r, properties(r) as props
+        DELETE r
+        CREATE (a)-[nr:{new_type}]->(b)
+        SET nr = props
+        RETURN count(nr) as changed
+        """,
+        {"from_id": payload.from_id, "to_id": payload.to_id, "session_id": payload.session_id},
+    )
+    return {"status": "success", "changed": result[0].get("changed", 0) if result else 0}
+
+
+@router.post("/graph/node/merge")
+def merge_graph_nodes(payload: NodeMergeRequest):
+    """Manual graph correction: merge node B into node A and repoint edges."""
+    if payload.keep_id == payload.merge_id:
+        raise HTTPException(status_code=400, detail="Choose two different nodes.")
+
+    if neo4j_client.is_mock():
+        keep = neo4j_client.mock_nodes.get(payload.keep_id)
+        drop = neo4j_client.mock_nodes.get(payload.merge_id)
+        persisted = _load_persisted_session_graph(payload.session_id)
+        if not keep and persisted:
+            keep = next((n for n in persisted.get("nodes", []) if n.get("id") == payload.keep_id), None)
+            drop = next((n for n in persisted.get("nodes", []) if n.get("id") == payload.merge_id), None)
+        if not keep or not drop:
+            raise HTTPException(status_code=404, detail="Node not found.")
+
+        for e in neo4j_client.mock_edges:
+            if e.get("from") == payload.merge_id:
+                e["from"] = payload.keep_id
+            if e.get("to") == payload.merge_id:
+                e["to"] = payload.keep_id
+        neo4j_client.mock_edges = [
+            e for e in neo4j_client.mock_edges
+            if e.get("from") != e.get("to")
+        ]
+        neo4j_client.mock_nodes.pop(payload.merge_id, None)
+
+        if persisted:
+            for e in persisted.get("edges", []):
+                if (e.get("from") or e.get("source")) == payload.merge_id:
+                    e["from"] = payload.keep_id
+                    e["source"] = payload.keep_id
+                if (e.get("to") or e.get("target")) == payload.merge_id:
+                    e["to"] = payload.keep_id
+                    e["target"] = payload.keep_id
+            seen = set()
+            deduped = []
+            for e in persisted.get("edges", []):
+                src = e.get("from") or e.get("source")
+                dst = e.get("to") or e.get("target")
+                if src == dst:
+                    continue
+                key = (src, dst, e.get("type"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(e)
+            persisted["edges"] = deduped
+            persisted["nodes"] = [n for n in persisted.get("nodes", []) if n.get("id") != payload.merge_id]
+            _save_persisted_session_graph(payload.session_id, persisted)
+        return {"status": "success", "keep_id": payload.keep_id, "merged_id": payload.merge_id}
+
+    scope_keep = "AND keep.session_id = $session_id" if payload.session_id else ""
+    scope_drop = "AND drop.session_id = $session_id" if payload.session_id else ""
+    found = neo4j_client.run_query(
+        f"""
+        MATCH (keep {{id: $keep_id}})
+        MATCH (drop {{id: $merge_id}})
+        WHERE true {scope_keep} {scope_drop}
+        RETURN keep.id as keep_id, drop.id as merge_id
+        """,
+        {"keep_id": payload.keep_id, "merge_id": payload.merge_id, "session_id": payload.session_id},
+    )
+    if not found:
+        raise HTTPException(status_code=404, detail="Node not found.")
+
+    for rel_type in ALLOWED_EDGE_TYPES:
+        neo4j_client.run_query(
+            f"""
+            MATCH (drop {{id: $merge_id}})-[r:{rel_type}]->(n)
+            MATCH (keep {{id: $keep_id}})
+            WHERE n.id <> $keep_id
+            WITH keep, n, r, properties(r) as props
+            MERGE (keep)-[nr:{rel_type}]->(n)
+            SET nr += props
+            DELETE r
+            """,
+            {"keep_id": payload.keep_id, "merge_id": payload.merge_id},
+        )
+        neo4j_client.run_query(
+            f"""
+            MATCH (n)-[r:{rel_type}]->(drop {{id: $merge_id}})
+            MATCH (keep {{id: $keep_id}})
+            WHERE n.id <> $keep_id
+            WITH keep, n, r, properties(r) as props
+            MERGE (n)-[nr:{rel_type}]->(keep)
+            SET nr += props
+            DELETE r
+            """,
+            {"keep_id": payload.keep_id, "merge_id": payload.merge_id},
+        )
+    neo4j_client.run_query("MATCH (drop {id: $merge_id}) DETACH DELETE drop", {"merge_id": payload.merge_id})
+    return {"status": "success", "keep_id": payload.keep_id, "merged_id": payload.merge_id}
 
 def _mock_node_payload(node_id: str, distance: int = 0) -> dict:
     n = neo4j_client.mock_nodes.get(node_id) or {}

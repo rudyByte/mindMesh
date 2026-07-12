@@ -892,6 +892,7 @@ export function RightSidebar() {
   const setLearningPathNarration = useStore((state) => state.setLearningPathNarration);
   const appendGraphData = useStore((state) => state.appendGraphData);
   const globalNodes = useStore((state) => state.nodes);
+  const globalEdges = useStore((state) => state.edges);
   const activeDocumentId = useStore((state) => state.activeDocumentId);
   const sessionId = useStore((state) => state.sessionId);
   const isLearningMode = useStore((state) => state.isLearningMode);
@@ -911,6 +912,9 @@ export function RightSidebar() {
   const [selectedStyle, setSelectedStyle] = useState('APA');
   const [citationSaving, setCitationSaving] = useState(false);
   const [pathGenerating, setPathGenerating] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [mergeTargetId, setMergeTargetId] = useState('');
+  const [correctionStatus, setCorrectionStatus] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isOpen, setIsOpen] = useState(true);
 
@@ -918,6 +922,9 @@ export function RightSidebar() {
     if (selectedNode) {
       setGapPrerequisites([]);
       setGapError(null);
+      setEditName(selectedNode.name || '');
+      setMergeTargetId('');
+      setCorrectionStatus(null);
     }
   }, [selectedNode]);
 
@@ -1061,7 +1068,7 @@ export function RightSidebar() {
               papers: []
             });
           } else {
-            setContextError(`HTTP Error ${response.status}: ${response.statusText}`);
+            setContextError(response.status === 404 ? "This node's context isn't available yet." : `Context unavailable (${response.status}).`);
           }
         } else {
           const response = await fetch(`${API_BASE_URL}/copilot/context`, {
@@ -1078,7 +1085,7 @@ export function RightSidebar() {
             const data = await response.json();
             setContextCard(data);
           } else {
-            setContextError(`HTTP Error ${response.status}: ${response.statusText}`);
+            setContextError(response.status === 404 ? "This node's context isn't available yet." : `Context unavailable (${response.status}).`);
           }
         }
       } catch (err: any) {
@@ -1171,6 +1178,81 @@ export function RightSidebar() {
     }
   };
 
+  const refreshAfterCorrection = async () => {
+    if (sessionId) await useStore.getState().reloadSessionData(sessionId);
+  };
+
+  const handleRenameNode = async () => {
+    if (!selectedNode || !editName.trim()) return;
+    setCorrectionStatus('Saving...');
+    const res = await fetch(`${API_BASE_URL}/graph/node/${selectedNode.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: editName.trim(), session_id: sessionId })
+    });
+    if (!res.ok) {
+      setCorrectionStatus(`Rename failed (${res.status})`);
+      return;
+    }
+    const updated = { ...selectedNode, name: editName.trim() };
+    setSelectedNode(updated);
+    setCorrectionStatus('Node renamed.');
+    await refreshAfterCorrection();
+  };
+
+  const handleMergeNode = async () => {
+    if (!selectedNode || !mergeTargetId) return;
+    setCorrectionStatus('Merging...');
+    const res = await fetch(`${API_BASE_URL}/graph/node/merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keep_id: mergeTargetId, merge_id: selectedNode.id, session_id: sessionId })
+    });
+    if (!res.ok) {
+      setCorrectionStatus(`Merge failed (${res.status})`);
+      return;
+    }
+    const keepNode = globalNodes.find(n => n.id === mergeTargetId) || null;
+    setSelectedNode(keepNode);
+    setCorrectionStatus('Nodes merged.');
+    await refreshAfterCorrection();
+  };
+
+  const edgeNodeName = (nodeId: string) => globalNodes.find(n => n.id === nodeId)?.name || nodeId.slice(0, 8);
+  const selectedEdges = selectedNode
+    ? globalEdges.filter(e => {
+        const src = typeof e.source === 'object' ? e.source.id : (e.source || e.from);
+        const dst = typeof e.target === 'object' ? e.target.id : (e.target || e.to);
+        return src === selectedNode.id || dst === selectedNode.id;
+      }).slice(0, 8)
+    : [];
+
+  const handleDeleteEdge = async (edge: any) => {
+    const fromId = typeof edge.source === 'object' ? edge.source.id : (edge.source || edge.from);
+    const toId = typeof edge.target === 'object' ? edge.target.id : (edge.target || edge.to);
+    setCorrectionStatus('Deleting edge...');
+    const res = await fetch(`${API_BASE_URL}/graph/edge`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from_id: fromId, to_id: toId, type: edge.type, session_id: sessionId })
+    });
+    setCorrectionStatus(res.ok ? 'Edge deleted.' : `Delete failed (${res.status})`);
+    if (res.ok) await refreshAfterCorrection();
+  };
+
+  const handleRetypeEdge = async (edge: any, newType: string) => {
+    const fromId = typeof edge.source === 'object' ? edge.source.id : (edge.source || edge.from);
+    const toId = typeof edge.target === 'object' ? edge.target.id : (edge.target || edge.to);
+    setCorrectionStatus('Retyping edge...');
+    const res = await fetch(`${API_BASE_URL}/graph/edge`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from_id: fromId, to_id: toId, type: edge.type, new_type: newType, session_id: sessionId })
+    });
+    setCorrectionStatus(res.ok ? 'Edge retyped.' : `Retype failed (${res.status})`);
+    if (res.ok) await refreshAfterCorrection();
+  };
+
   if (!isOpen) {
     return (
       <div className="absolute top-24 right-0 z-40">
@@ -1221,6 +1303,77 @@ export function RightSidebar() {
               <p className="text-xs text-slate-300 leading-relaxed font-medium font-sans">
                 {selectedNode.description || 'No description extracted yet.'}
               </p>
+            </div>
+
+            {/* Graph Correction */}
+            <div className="p-3.5 glass-card rounded-xl border border-amber-500/15 bg-amber-950/5 space-y-3">
+              <h4 className="text-[9px] font-mono font-bold text-amber-300 uppercase tracking-widest flex items-center gap-1">
+                <RefreshCw className="w-3.5 h-3.5" /> Graph Correction
+              </h4>
+              <div className="flex gap-2">
+                <input
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="flex-1 min-w-0 px-2 py-1.5 rounded-lg bg-[#030c0b] border border-amber-500/15 text-[11px] text-slate-200 focus:outline-none focus:border-amber-400/50"
+                  placeholder="Rename node"
+                />
+                <button
+                  onClick={handleRenameNode}
+                  className="px-2.5 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/20 text-[10px] font-bold text-amber-200 uppercase"
+                >
+                  Rename
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <select
+                  value={mergeTargetId}
+                  onChange={(e) => setMergeTargetId(e.target.value)}
+                  className="flex-1 min-w-0 px-2 py-1.5 rounded-lg bg-[#030c0b] border border-amber-500/15 text-[11px] text-slate-200 focus:outline-none focus:border-amber-400/50"
+                >
+                  <option value="">Merge this node into...</option>
+                  {globalNodes.filter(n => n.id !== selectedNode.id).slice(0, 120).map(n => (
+                    <option key={n.id} value={n.id}>{n.name}</option>
+                  ))}
+                </select>
+                <button
+                  disabled={!mergeTargetId}
+                  onClick={handleMergeNode}
+                  className="px-2.5 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 disabled:opacity-40 border border-amber-500/20 text-[10px] font-bold text-amber-200 uppercase"
+                >
+                  Merge
+                </button>
+              </div>
+              {selectedEdges.length > 0 && (
+                <div className="space-y-1.5">
+                  <span className="text-[9px] font-mono font-bold text-slate-500 uppercase">Connected Edges</span>
+                  {selectedEdges.map((edge: any, idx: number) => {
+                    const fromId = typeof edge.source === 'object' ? edge.source.id : (edge.source || edge.from);
+                    const toId = typeof edge.target === 'object' ? edge.target.id : (edge.target || edge.to);
+                    return (
+                      <div key={`${fromId}-${toId}-${edge.type}-${idx}`} className="flex items-center gap-1.5 text-[9px] bg-[#030c0b]/50 border border-amber-500/10 rounded px-2 py-1">
+                        <span className="flex-1 truncate text-slate-400">{edgeNodeName(fromId)} → {edgeNodeName(toId)}</span>
+                        <select
+                          defaultValue={edge.type}
+                          onChange={(e) => handleRetypeEdge(edge, e.target.value)}
+                          className="max-w-[115px] bg-[#020807] border border-amber-500/15 rounded px-1 py-0.5 text-amber-200"
+                        >
+                          {['PREREQUISITE_OF','RELATED_TO','EXTENDS','PART_OF','USES','USED_FOR','CITES','MENTIONS'].map(t => (
+                            <option key={t} value={t}>{t}</option>
+                          ))}
+                        </select>
+                        <button
+                          title="Delete edge"
+                          onClick={() => handleDeleteEdge(edge)}
+                          className="p-1 rounded text-rose-300 hover:bg-rose-500/10"
+                        >
+                          <Trash className="w-3 h-3" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {correctionStatus && <p className="text-[10px] text-amber-200 font-mono">{correctionStatus}</p>}
             </div>
 
             {/* Context Card (Sprint 3) */}

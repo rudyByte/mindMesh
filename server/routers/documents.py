@@ -103,6 +103,7 @@ def _save_doc_status(
     failed_chunks: Optional[int] = None,
     total_chunks: Optional[int] = None,
     extraction_mode: Optional[str] = None,
+    fallback_chunks: Optional[int] = None,
     ocr_used: Optional[bool] = None,
     ocr_confidence: Optional[float] = None,
 ) -> None:
@@ -116,6 +117,7 @@ def _save_doc_status(
         "failed_chunks": failed_chunks if failed_chunks is not None else previous.get("failed_chunks", 0),
         "total_chunks": total_chunks if total_chunks is not None else previous.get("total_chunks", 0),
         "extraction_mode": extraction_mode or previous.get("extraction_mode"),
+        "fallback_chunks": fallback_chunks if fallback_chunks is not None else previous.get("fallback_chunks", 0),
         "ocr_used": ocr_used if ocr_used is not None else previous.get("ocr_used", False),
         "ocr_confidence": ocr_confidence if ocr_confidence is not None else previous.get("ocr_confidence"),
     }
@@ -126,6 +128,7 @@ def _save_doc_status(
         "failed_chunks": payload["failed_chunks"],
         "total_chunks": payload["total_chunks"],
         "extraction_mode": payload["extraction_mode"],
+        "fallback_chunks": payload["fallback_chunks"],
         "ocr_used": payload["ocr_used"],
         "ocr_confidence": payload["ocr_confidence"],
     }
@@ -234,6 +237,7 @@ class StatusResponse(BaseModel):
     failed_chunks: int = 0
     total_chunks: int = 0
     extraction_mode: str | None = None
+    fallback_chunks: int = 0
     ocr_used: bool = False
     ocr_confidence: float | None = None
 
@@ -712,6 +716,7 @@ def _infer_learning_prerequisite_edges(nodes: list[dict]) -> list[dict]:
 
 def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, session_id: str):
     failed_chunks = 0
+    fallback_chunks = 0
     total_chunks = 0
     text_meta = {"ocr_used": False, "ocr_confidence": None}
     _save_doc_status(doc_id, "processing", 10, None, session_id)
@@ -765,6 +770,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             failed_chunks=0,
             total_chunks=total_chunks,
             extraction_mode="full_document_chunked",
+            fallback_chunks=0,
         )
         
         # 3. For each chunk, extract nodes/relationships using LLM client
@@ -780,7 +786,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             and not getattr(llm_client, "_is_mock", False)
         )
 
-        def extract_one_chunk(chunk_index: int, chunk_text: str) -> tuple[list, list, bool]:
+        def extract_one_chunk(chunk_index: int, chunk_text: str) -> tuple[list, list, bool, bool]:
             if use_serverless_local_extraction and not allow_serverless_llm_for_small_doc:
                 result = _build_dynamic_fallback_graph(
                     chunk_text,
@@ -794,11 +800,12 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 for rel in extracted_rels:
                     rel["from"] = normalize_and_clean_concept_name(rel.get("from", ""))
                     rel["to"] = normalize_and_clean_concept_name(rel.get("to", ""))
-                return extracted_nodes, extracted_rels, False
+                return extracted_nodes, extracted_rels, False, True
 
             try:
                 result = llm_client.extract_graph_from_chunk(chunk_text, include_prerequisites=False)
                 chunk_failed = False
+                fallback_used = False
             except Exception as first_error:
                 logger.error(f"Error extracting chunk {chunk_index} for doc {doc_id}: {first_error}")
                 if "timeout" in str(first_error).lower() or "timed out" in str(first_error).lower():
@@ -808,6 +815,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                         main_topic_info,
                     )
                     chunk_failed = False
+                    fallback_used = True
                     extracted_nodes = result.get("nodes", [])
                     extracted_rels = result.get("relationships", [])
                     for node in extracted_nodes:
@@ -815,10 +823,11 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                     for rel in extracted_rels:
                         rel["from"] = normalize_and_clean_concept_name(rel.get("from", ""))
                         rel["to"] = normalize_and_clean_concept_name(rel.get("to", ""))
-                    return extracted_nodes, extracted_rels, chunk_failed
+                    return extracted_nodes, extracted_rels, chunk_failed, fallback_used
                 try:
                     result = llm_client.extract_graph_from_chunk(chunk_text, include_prerequisites=False)
                     chunk_failed = False
+                    fallback_used = False
                 except Exception as retry_error:
                     logger.error(f"Retry failed for chunk {chunk_index} in doc {doc_id}: {retry_error}")
                     # Per-chunk local fallback only; never replace the whole document graph.
@@ -828,6 +837,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                         main_topic_info,
                     )
                     chunk_failed = False
+                    fallback_used = True
 
             extracted_nodes = result.get("nodes", [])
             extracted_rels = result.get("relationships", [])
@@ -838,7 +848,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 rel["from"] = normalize_and_clean_concept_name(rel.get("from", ""))
                 rel["to"] = normalize_and_clean_concept_name(rel.get("to", ""))
 
-            return extracted_nodes, extracted_rels, chunk_failed
+            return extracted_nodes, extracted_rels, chunk_failed, fallback_used
 
         if chunks:
             max_workers = min(4, total_chunks)
@@ -852,11 +862,13 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 for future in as_completed(futures):
                     i = futures[future]
                     try:
-                        extracted_nodes, extracted_rels, chunk_failed = future.result()
+                        extracted_nodes, extracted_rels, chunk_failed, fallback_used = future.result()
                         all_nodes.extend(extracted_nodes)
                         all_relationships.extend(extracted_rels)
                         if chunk_failed:
                             failed_chunks += 1
+                        if fallback_used:
+                            fallback_chunks += 1
                     except Exception as e:
                         # Defensive: extract_one_chunk should already fallback, but status must never lie.
                         logger.error(f"Unhandled chunk worker failure for chunk {i} in doc {doc_id}: {e}")
@@ -871,7 +883,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                         session_id,
                         failed_chunks=failed_chunks,
                         total_chunks=total_chunks,
-                        extraction_mode="full_document_chunked",
+                        extraction_mode="keyword_fallback" if fallback_chunks == completed_chunks and completed_chunks > 0 else ("hybrid_llm_keyword" if fallback_chunks > 0 else "full_document_chunked"),
+                        fallback_chunks=fallback_chunks,
                     )
         else:
             _save_doc_status(
@@ -883,6 +896,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 failed_chunks=0,
                 total_chunks=0,
                 extraction_mode="full_document_chunked",
+                fallback_chunks=0,
             )
             
         # Implement explicit Regex/Stop-Word Blacklist for broken or non-academic terms
@@ -1603,6 +1617,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                         "session_id": session_id
                     })
                     
+        final_extraction_mode = "keyword_fallback" if total_chunks and fallback_chunks == total_chunks else ("hybrid_llm_keyword" if fallback_chunks > 0 else "full_document_chunked")
+
         # Update status to done
         _persist_mock_session_graph(session_id)
         _save_doc_status(
@@ -1613,7 +1629,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             session_id,
             failed_chunks=failed_chunks,
             total_chunks=total_chunks,
-            extraction_mode="full_document_chunked",
+            extraction_mode=final_extraction_mode,
+            fallback_chunks=fallback_chunks,
             ocr_used=bool(text_meta.get("ocr_used")),
             ocr_confidence=text_meta.get("ocr_confidence"),
         )
@@ -1632,7 +1649,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 d.progress_pct = 100,
                 d.failed_chunks = $failed_chunks,
                 d.total_chunks = $total_chunks,
-                d.extraction_mode = 'full_document_chunked',
+                d.extraction_mode = $extraction_mode,
+                d.fallback_chunks = $fallback_chunks,
                 d.ocr_used = $ocr_used,
                 d.ocr_confidence = $ocr_confidence
             """,
@@ -1640,6 +1658,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 "doc_id": doc_id,
                 "failed_chunks": failed_chunks,
                 "total_chunks": total_chunks,
+                "extraction_mode": final_extraction_mode,
+                "fallback_chunks": fallback_chunks,
                 "ocr_used": bool(text_meta.get("ocr_used")),
                 "ocr_confidence": text_meta.get("ocr_confidence"),
             }
@@ -1658,7 +1678,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             session_id,
             failed_chunks=failed_chunks,
             total_chunks=total_chunks,
-            extraction_mode="full_document_chunked",
+            extraction_mode="keyword_fallback" if fallback_chunks else "full_document_chunked",
+            fallback_chunks=fallback_chunks,
             ocr_used=bool(text_meta.get("ocr_used")),
             ocr_confidence=text_meta.get("ocr_confidence"),
         )
@@ -1694,7 +1715,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 d.error_msg = $error,
                 d.failed_chunks = $failed_chunks,
                 d.total_chunks = $total_chunks,
-                d.extraction_mode = 'full_document_chunked',
+                d.extraction_mode = $extraction_mode,
+                d.fallback_chunks = $fallback_chunks,
                 d.ocr_used = $ocr_used,
                 d.ocr_confidence = $ocr_confidence
             """,
@@ -1703,6 +1725,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 "error": error_msg,
                 "failed_chunks": failed_chunks,
                 "total_chunks": total_chunks,
+                "extraction_mode": "keyword_fallback" if fallback_chunks else "full_document_chunked",
+                "fallback_chunks": fallback_chunks,
                 "ocr_used": bool(text_meta.get("ocr_used")),
                 "ocr_confidence": text_meta.get("ocr_confidence"),
             }
@@ -2090,6 +2114,7 @@ def get_document_status(id: str, session_id: Optional[str] = Query(None)):
             failed_chunks=persisted_status.get("failed_chunks") or 0,
             total_chunks=persisted_status.get("total_chunks") or 0,
             extraction_mode=persisted_status.get("extraction_mode"),
+            fallback_chunks=persisted_status.get("fallback_chunks") or 0,
             ocr_used=bool(persisted_status.get("ocr_used")),
             ocr_confidence=persisted_status.get("ocr_confidence"),
         )
@@ -2103,6 +2128,7 @@ def get_document_status(id: str, session_id: Optional[str] = Query(None)):
            d.failed_chunks as failed_chunks,
            d.total_chunks as total_chunks,
            d.extraction_mode as extraction_mode,
+           d.fallback_chunks as fallback_chunks,
            d.ocr_used as ocr_used,
            d.ocr_confidence as ocr_confidence
     """
@@ -2116,6 +2142,7 @@ def get_document_status(id: str, session_id: Optional[str] = Query(None)):
             failed_chunks=record.get("failed_chunks") or 0,
             total_chunks=record.get("total_chunks") or 0,
             extraction_mode=record.get("extraction_mode"),
+            fallback_chunks=record.get("fallback_chunks") or 0,
             ocr_used=bool(record.get("ocr_used")),
             ocr_confidence=record.get("ocr_confidence"),
         )

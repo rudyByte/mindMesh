@@ -20,6 +20,7 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
   const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'extracting' | 'building' | 'done' | 'error'>('idle');
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
+  const [extractionNotice, setExtractionNotice] = useState('');
   const [fileName, setFileName] = useState('');
   
   const addDocument = useStore((state) => state.addDocument);
@@ -237,7 +238,14 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
         }
         
         const data = await response.json();
-        const { status, progress_pct, error } = data;
+        const { status, progress_pct, error, fallback_chunks, total_chunks, extraction_mode } = data;
+        if (fallback_chunks > 0) {
+          setExtractionNotice(
+            extraction_mode === 'keyword_fallback'
+              ? `Basic keyword extraction used for ${fallback_chunks}/${total_chunks || fallback_chunks} chunks because AI extraction was unavailable.`
+              : `Hybrid extraction: ${fallback_chunks}/${total_chunks || fallback_chunks} chunks used local fallback.`
+          );
+        }
         
         setProgress(progress_pct);
         updateDocumentStatus(docId, status, progress_pct);
@@ -399,6 +407,11 @@ export default function UploadModal({ isOpen, onClose }: UploadModalProps) {
                   <span>{uploadState.toUpperCase()}</span>
                   <span>{progress}%</span>
                 </div>
+                {extractionNotice && (
+                  <p className="text-[10px] text-amber-300 bg-amber-950/20 border border-amber-500/15 rounded-md px-2 py-1 font-sans">
+                    {extractionNotice}
+                  </p>
+                )}
               </div>
             )}
 
