@@ -194,6 +194,44 @@ export default function GraphCanvas() {
     return { nodes: validNodes, links: validLinks };
   }, [filteredNodes, filteredEdges]);
 
+  // ── Pre-assign tier-based x/y so nodes START in the right row ──────────
+  // ForceGraph2D uses these as initial positions before the simulation runs.
+  // This guarantees the hierarchical shape even before forces converge.
+  const hierarchicalNodes = React.useMemo(() => {
+    const TIER: Record<string, number> = {
+      Topic: 0, Concept: 1, Method: 2, Dataset: 2, Paper: 2, Author: 3, Keyword: 3,
+    };
+    const NUM_TIERS = 4;
+    const W = dimensions.width  || 900;
+    const H = dimensions.height || 600;
+    const ySpan = H * 0.75;
+    const yStart = -ySpan / 2;
+    const yStep  = ySpan / (NUM_TIERS - 1);
+
+    // Group node indices by tier to compute x spacing
+    const tierNodes: Record<number, any[]> = {};
+    for (let t = 0; t < NUM_TIERS; t++) tierNodes[t] = [];
+    validatedGraphData.nodes.forEach((n: any) => {
+      const tier = TIER[n.label] ?? 1;
+      tierNodes[tier].push(n);
+    });
+
+    return validatedGraphData.nodes.map((n: any) => {
+      // Only inject position if node has no existing fixed position
+      if (n.fx != null || n.fy != null) return { ...n };
+      const tier  = TIER[n.label] ?? 1;
+      const peers = tierNodes[tier];
+      const idx   = peers.indexOf(n);
+      const count = Math.max(1, peers.length);
+      const xRange = Math.min(W * 0.80, count * 140);
+      const x = count === 1
+        ? 0
+        : -xRange / 2 + (idx / (count - 1)) * xRange;
+      const y = yStart + tier * yStep;
+      return { ...n, x, y };
+    });
+  }, [validatedGraphData.nodes, dimensions]);
+
   // Set zoom to fit flag when nodes are loaded or active document changes
   useEffect(() => {
     if (safeNodes.length > 0) {
@@ -419,10 +457,7 @@ export default function GraphCanvas() {
     }));
   }, [validatedGraphData.nodes]);
 
-  // ── Hierarchical layout via D3 forces ────────────────────────────────
-  // Assign each node label a Y-tier. Topic nodes sit at the top, Concepts
-  // in the middle, Methods/Datasets/Papers one level below, Authors/Keywords
-  // near the bottom. forceX spreads nodes evenly within each tier.
+  // ── Hierarchical layout via D3 forces ────────────────────────────────────
   useEffect(() => {
     if (!fgRef.current) return;
     try {
@@ -430,40 +465,33 @@ export default function GraphCanvas() {
       const canvasHeight = dimensions.height || 600;
       const canvasWidth  = dimensions.width  || 800;
 
-      // ── Tier map: label → vertical band (0 = top, 1 = next …)
       const TIER: Record<string, number> = {
-        Topic:   0,
-        Concept: 1,
-        Method:  2,
-        Dataset: 2,
-        Paper:   2,
-        Author:  3,
-        Keyword: 3,
+        Topic: 0, Concept: 1, Method: 2, Dataset: 2, Paper: 2, Author: 3, Keyword: 3,
       };
-
-      // Y target for each tier — spread over 80 % of canvas height
       const NUM_TIERS = 4;
-      const ySpan    = canvasHeight * 0.80;
-      const yStart   = -ySpan / 2;
-      const yStep    = ySpan / (NUM_TIERS - 1);
-      const tierY = (tier: number) => yStart + tier * yStep;
+      const ySpan  = canvasHeight * 0.78;
+      const yStart = -ySpan / 2;
+      const yStep  = ySpan / (NUM_TIERS - 1);
+      const tierY  = (tier: number) => yStart + tier * yStep;
 
-      // Group node IDs by tier so we can spread them in X
+      // Build tier groups for X distribution
       const tierGroups: Record<number, string[]> = {};
       for (let t = 0; t < NUM_TIERS; t++) tierGroups[t] = [];
-
       (filteredNodes as any[]).forEach((n: any) => {
         const tier = TIER[n.label] ?? 1;
         tierGroups[tier].push(n.id);
       });
 
-      // ── Charge: moderate repulsion so tiers don't collapse
+      // ❶ Kill the default center force — this is what collapses nodes into a lens
+      fg.d3Force('center', null);
+
+      // ❷ Moderate charge repulsion
       const chargeForce = fg.d3Force('charge');
       if (chargeForce && typeof chargeForce.strength === 'function') {
-        chargeForce.strength(-550);
+        chargeForce.strength(-350);
       }
 
-      // ── Link: shorter distance inside the same tier, longer across tiers
+      // ❸ Link distance — shorter within same tier, longer across
       const linkForce = fg.d3Force('link');
       if (linkForce && typeof linkForce.distance === 'function') {
         linkForce.distance((link: any) => {
@@ -474,40 +502,40 @@ export default function GraphCanvas() {
             const tgtNode = (filteredNodes as any[]).find((n: any) => n.id === tgtId);
             const srcTier = TIER[srcNode?.label] ?? 1;
             const tgtTier = TIER[tgtNode?.label] ?? 1;
-            return srcTier === tgtTier ? 160 : 220;
-          } catch { return 190; }
+            return srcTier === tgtTier ? 150 : 200;
+          } catch { return 180; }
         });
       }
 
-      // ── forceY: pull each node toward its tier's Y band (strong)
+      // ❹ Strong forceY — locks each node to its tier's Y band
       fg.d3Force('y', forceY((node: any) => {
         const tier = TIER[node.label] ?? 1;
         return tierY(tier);
-      }).strength(0.55));
+      }).strength(0.8));
 
-      // ── forceX: spread nodes across canvas width within each tier
+      // ❺ forceX — distributes nodes evenly across canvas width per tier
       fg.d3Force('x', forceX((node: any) => {
         const tier = TIER[node.label] ?? 1;
         const siblings = tierGroups[tier];
-        const idx = siblings.indexOf(node.id);
+        const idx   = siblings.indexOf(node.id);
         const count = Math.max(1, siblings.length);
-        // Distribute evenly across 80% of canvas width
-        return -canvasWidth * 0.40 + (idx / Math.max(count - 1, 1)) * canvasWidth * 0.80;
-      }).strength(0.35));
+        const xRange = Math.min(canvasWidth * 0.85, count * 160);
+        if (count === 1) return 0;
+        return -xRange / 2 + (idx / (count - 1)) * xRange;
+      }).strength(0.5));
 
-      // ── Collision: prevent node overlap
+      // ❻ Collision — prevent nodes from touching
       const collideForce = forceCollide((node: any) => {
         try {
           const rawDegree = (nodeDegrees && node && node.id) ? (nodeDegrees[node.id] || 0) : 0;
           const degree = typeof rawDegree === 'number' && !isNaN(rawDegree) && rawDegree >= 0 ? rawDegree : 0;
-          return 4 + Math.sqrt(degree) * 1.8 + 52;
-        } catch { return 56; }
+          return 4 + Math.sqrt(degree) * 1.8 + 48;
+        } catch { return 52; }
       });
       if (collideForce && typeof collideForce.iterations === 'function') {
         fg.d3Force('collide', collideForce.iterations(4));
       }
 
-      // Reheat so the new forces take effect
       if (typeof fg.d3ReheatSimulation === 'function') {
         fg.d3ReheatSimulation();
       }
@@ -769,7 +797,7 @@ export default function GraphCanvas() {
             width={graphWidth}
             height={graphHeight}
             graphData={{
-              nodes: validatedGraphData.nodes.map(n => ({ ...n })),
+              nodes: hierarchicalNodes.map((n: any) => ({ ...n })),
               links: validatedGraphData.links.map(l => ({ ...l }))
             }}
             nodeId="id"
