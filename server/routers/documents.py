@@ -623,6 +623,21 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 chunk_failed = False
             except Exception as first_error:
                 logger.error(f"Error extracting chunk {chunk_index} for doc {doc_id}: {first_error}")
+                if "timeout" in str(first_error).lower() or "timed out" in str(first_error).lower():
+                    result = _build_dynamic_fallback_graph(
+                        chunk_text,
+                        f"{filename} chunk {chunk_index + 1}",
+                        main_topic_info,
+                    )
+                    chunk_failed = True
+                    extracted_nodes = result.get("nodes", [])
+                    extracted_rels = result.get("relationships", [])
+                    for node in extracted_nodes:
+                        node["name"] = normalize_and_clean_concept_name(node.get("name", ""))
+                    for rel in extracted_rels:
+                        rel["from"] = normalize_and_clean_concept_name(rel.get("from", ""))
+                        rel["to"] = normalize_and_clean_concept_name(rel.get("to", ""))
+                    return extracted_nodes, extracted_rels, chunk_failed
                 try:
                     result = llm_client.extract_graph_from_chunk(chunk_text, include_prerequisites=False)
                     chunk_failed = False

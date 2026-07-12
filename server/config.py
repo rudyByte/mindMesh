@@ -13,6 +13,7 @@ class Config:
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
     GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+    LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
 
     # Anthropic (legacy fallback — use GROQ_API_KEY for new deployments)
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")

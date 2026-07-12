@@ -283,7 +283,10 @@ class LLMClient:
 
         if config.ANTHROPIC_API_KEY and "mock" not in config.ANTHROPIC_API_KEY.lower() and Anthropic:
             try:
-                self._anthropic_client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
+                self._anthropic_client = Anthropic(
+                    api_key=config.ANTHROPIC_API_KEY,
+                    timeout=config.LLM_TIMEOUT_SECONDS,
+                )
                 self._is_mock = False
                 logger.info("Successfully connected to Anthropic API.")
             except Exception as e:
@@ -291,7 +294,11 @@ class LLMClient:
 
         if config.GROQ_API_KEY and "mock-api-key" not in config.GROQ_API_KEY:
             try:
-                self._client = OpenAI(api_key=config.GROQ_API_KEY, base_url=config.GROQ_BASE_URL)
+                self._client = OpenAI(
+                    api_key=config.GROQ_API_KEY,
+                    base_url=config.GROQ_BASE_URL,
+                    timeout=config.LLM_TIMEOUT_SECONDS,
+                )
                 self._is_mock = False
                 logger.info("Successfully connected to Groq API.")
             except Exception as e:
@@ -1129,22 +1136,15 @@ class LLMClient:
         )
         
         try:
-            response = self._client.chat.completions.create(
-                model=config.GROQ_MODEL,
-                max_tokens=1500,
-                temperature=0.0,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Concepts list: {json.dumps(concepts)}\nReturn ONLY valid JSON."}
-                ]
+            response_text = self._strip_json_fences(
+                self._complete_text(
+                    system_prompt,
+                    f"Concepts list: {json.dumps(concepts[:80])}\nReturn ONLY valid JSON.",
+                    max_tokens=1500,
+                    temperature=0.0,
+                    prefer_anthropic=True,
+                )
             )
-            
-            response_text = response.choices[0].message.content.strip()
-            # Clean markdown formatting if present
-            if response_text.startswith("```"):
-                response_text = re.sub(r"^```(?:json)?", "", response_text)
-                response_text = re.sub(r"```$", "", response_text).strip()
-                
             parsed = json.loads(response_text)
             rels = parsed.get("relationships", [])
             
