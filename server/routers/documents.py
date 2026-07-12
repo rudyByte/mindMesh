@@ -556,6 +556,44 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
     return {"nodes": nodes, "relationships": rels}
 
 
+def _infer_learning_prerequisite_edges(nodes: list[dict]) -> list[dict]:
+    """Infer prerequisite edges from concepts already extracted from this document/session."""
+    node_names = [n.get("name", "") for n in nodes if n.get("name")]
+    lowered = {name.lower(): name for name in node_names}
+
+    def find_any(patterns: list[str], exclude: str | None = None) -> list[str]:
+        matches = []
+        for low, original in lowered.items():
+            if exclude and original == exclude:
+                continue
+            if any(pattern in low for pattern in patterns):
+                matches.append(original)
+        return matches
+
+    rules = [
+        (["voltmeter"], [["voltage", "potential"], ["circuit"], ["current"], ["resistance", "resistor"]]),
+        (["ohm", "ohm's law", "ohms law"], [["voltage", "potential"], ["current"], ["resistance", "resistor"], ["circuit"]]),
+        (["ammeter"], [["current"], ["circuit"], ["resistance", "resistor"]]),
+        (["resistor", "resistance"], [["current"], ["voltage", "potential"], ["circuit"]]),
+        (["voltage"], [["potential difference", "electric potential"], ["charge"]]),
+        (["potential difference", "electric potential"], [["charge"]]),
+    ]
+
+    inferred = []
+    seen = set()
+    for target_patterns, prereq_groups in rules:
+        targets = find_any(target_patterns)
+        for target in targets:
+            for prereq_patterns in prereq_groups:
+                prereqs = find_any(prereq_patterns, exclude=target)
+                for prereq in prereqs[:2]:
+                    key = (prereq, target)
+                    if prereq != target and key not in seen:
+                        seen.add(key)
+                        inferred.append({"from": prereq, "to": target, "type": "PREREQUISITE_OF"})
+    return inferred
+
+
 
 def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, session_id: str):
     failed_chunks = 0
@@ -1084,6 +1122,21 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                         "to": to_name,
                         "type": "PREREQUISITE_OF"
                     })
+
+        inferred_prereqs = _infer_learning_prerequisite_edges(canonical_nodes)
+        if inferred_prereqs:
+            existing_rel_keys = {
+                (rel.get("from"), rel.get("to"), rel.get("type"))
+                for rel in final_relationships
+            }
+            added = 0
+            for rel in inferred_prereqs:
+                key = (rel.get("from"), rel.get("to"), rel.get("type"))
+                if key not in existing_rel_keys:
+                    final_relationships.append(rel)
+                    existing_rel_keys.add(key)
+                    added += 1
+            logger.info(f"Added {added} document-local inferred prerequisite relationships.")
 
         # Dedicated bibliography extraction
         references_text = None
