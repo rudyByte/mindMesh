@@ -380,6 +380,46 @@ def enrich_node_descriptions(canonical_nodes: list, full_text: str):
             elif not desc:
                 node["description"] = f"Key concept of {name} extracted from the document."
 
+def _concept_identity_key(name: str) -> str:
+    """Stable identity key for case/punctuation variants of one concept."""
+    clean = (name or "").lower()
+    clean = clean.replace("’", "'")
+    clean = re.sub(r"\bohm'?s?\s+law\b", "ohms law", clean)
+    clean = re.sub(r"[^a-z0-9]+", " ", clean)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    aliases = {
+        "ohm law": "ohms law",
+        "ohms law": "ohms law",
+        "electric potential": "potential difference",
+        "electrical potential": "potential difference",
+        "voltage drop": "potential difference",
+        "electric current": "current",
+        "electric charge": "electric charge",
+        "digital voltmeter": "voltmeter",
+        "digital multimeter": "digital multimeter",
+        "resistor": "resistance",
+        "equivalent resistance": "resistance",
+    }
+    return aliases.get(clean, clean)
+
+
+def _display_concept_name(name: str) -> str:
+    key = _concept_identity_key(name)
+    display = {
+        "ohms law": "Ohm's Law",
+        "potential difference": "Potential Difference",
+        "voltmeter": "Voltmeter",
+        "ammeter": "Ammeter",
+        "digital multimeter": "Digital Multimeter",
+        "resistance": "Resistance",
+        "current": "Current",
+        "voltage": "Voltage",
+        "circuit": "Circuit",
+        "electric charge": "Electric Charge",
+    }
+    return display.get(key, (name or "").strip())
+
+
 def cluster_and_merge_nodes(nodes: list) -> tuple[list, dict]:
     clusters = []
     threshold = getattr(config, "EMBEDDING_SIMILARITY_THRESHOLD", 0.87)
@@ -395,6 +435,10 @@ def cluster_and_merge_nodes(nodes: list) -> tuple[list, dict]:
         matched = False
         for cluster in clusters:
             rep_node = cluster[0]
+            if _concept_identity_key(name) and _concept_identity_key(name) == _concept_identity_key(rep_node.get("name", "")):
+                cluster.append(node)
+                matched = True
+                break
             rep_embedding = rep_node.get("embedding")
             if not rep_embedding:
                 rep_embedding = embedding_client.embed_node(rep_node)
@@ -455,7 +499,7 @@ def cluster_and_merge_nodes(nodes: list) -> tuple[list, dict]:
             
         canonical_node = {
             "label": rep.get("label", "Concept"),
-            "name": rep["name"].strip(),
+            "name": _display_concept_name(rep["name"]),
             "description": canonical_desc,
             "difficulty_level": rep.get("difficulty_level", "Beginner"),
             "embedding": rep.get("embedding") or embedding_client.embed_node(rep)
@@ -467,6 +511,7 @@ def cluster_and_merge_nodes(nodes: list) -> tuple[list, dict]:
         
         for node in cluster:
             name_mapping[node["name"].lower().strip()] = canonical_node["name"]
+            name_mapping[_concept_identity_key(node["name"])] = canonical_node["name"]
             
     return canonical_nodes, name_mapping
 
@@ -497,6 +542,7 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
     topic_name = main_topic_info.get("name") or filename.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").title()
     if re.search(r"\bohm'?s?\s+law\b", topic_name, re.IGNORECASE):
         topic_name = "Ohm's Law"
+    topic_name = _display_concept_name(topic_name)
     topic_desc = main_topic_info.get("description") or f"{topic_name} is the main topic extracted from {filename}."
     bad_fragment_words = {
         "there", "today", "positions", "labeled", "labelled", "settings", "setting", "become",
@@ -582,18 +628,17 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
     for i, (name, _) in enumerate(ranked):
         nodes.append({
             "label": "Concept",
-            "name": name,
+            "name": _display_concept_name(name),
             "description": _sentence_for_term(text, name),
             "difficulty_level": "Beginner" if i < 5 else "Intermediate",
-            "level": "foundation" if i < 4 else ("advanced" if i > 9 else "core"),
+            "level": "core",
         })
 
     rels = []
     seen = set()
     for node in nodes[1:]:
-        level = node.get("level")
-        rel = "PREREQUISITE" if level == "foundation" else ("EXTENDS" if level == "advanced" else "CONTAINS")
-        source, target = (node["name"], topic_name) if level == "foundation" else (topic_name, node["name"])
+        rel = "CONTAINS"
+        source, target = topic_name, node["name"]
         key = (source, target, rel)
         if key not in seen:
             seen.add(key)
@@ -604,25 +649,32 @@ def _build_dynamic_fallback_graph(text: str, filename: str, main_topic_info: dic
 
 def _infer_learning_prerequisite_edges(nodes: list[dict]) -> list[dict]:
     """Infer prerequisite edges from concepts already extracted from this document/session."""
-    node_names = [n.get("name", "") for n in nodes if n.get("name")]
-    lowered = {name.lower(): name for name in node_names}
+    node_names = [
+        n.get("name", "")
+        for n in nodes
+        if n.get("name") and n.get("label") not in ["Paper", "Document", "Citation", "Note", "Highlight", "Author"]
+    ]
+    lowered = {_concept_identity_key(name): name for name in node_names}
 
-    def find_any(patterns: list[str], exclude: str | None = None) -> list[str]:
+    def find_any(keys: list[str], exclude: str | None = None) -> list[str]:
         matches = []
+        exclude_key = _concept_identity_key(exclude or "")
         for low, original in lowered.items():
             if exclude and original == exclude:
                 continue
-            if any(pattern in low for pattern in patterns):
+            if exclude_key and low == exclude_key:
+                continue
+            if low in keys:
                 matches.append(original)
         return matches
 
     rules = [
-        (["voltmeter"], [["voltage", "potential"], ["circuit"], ["current"], ["resistance", "resistor"]]),
-        (["ohm", "ohm's law", "ohms law"], [["voltage", "potential"], ["current"], ["resistance", "resistor"], ["circuit"]]),
-        (["ammeter"], [["current"], ["circuit"], ["resistance", "resistor"]]),
-        (["resistor", "resistance"], [["current"], ["voltage", "potential"], ["circuit"]]),
-        (["voltage"], [["potential difference", "electric potential"], ["charge"]]),
-        (["potential difference", "electric potential"], [["charge"]]),
+        (["voltmeter"], [["voltage"], ["potential difference"], ["circuit"]]),
+        (["ammeter"], [["current"], ["circuit"]]),
+        (["ohms law"], [["voltage"], ["current"], ["resistance"], ["circuit"]]),
+        (["resistance"], [["current"], ["voltage"], ["circuit"]]),
+        (["voltage"], [["potential difference"], ["electric charge"]]),
+        (["potential difference"], [["electric charge"]]),
     ]
 
     inferred = []
@@ -898,7 +950,11 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         # Run global semantic merging and clustering
         canonical_nodes, name_mapping = cluster_and_merge_nodes(all_nodes_combined)
         current_canonical_names = {
-            name_mapping.get(n.get("name", "").lower().strip(), n.get("name", "")).lower().strip()
+            (
+                name_mapping.get(n.get("name", "").lower().strip())
+                or name_mapping.get(_concept_identity_key(n.get("name", "")))
+                or n.get("name", "")
+            ).lower().strip()
             for n in all_nodes
             if n.get("name")
         }
@@ -967,8 +1023,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             if not from_name or not to_name:
                 continue
                 
-            canonical_from = name_mapping.get(from_name.lower().strip(), from_name)
-            canonical_to = name_mapping.get(to_name.lower().strip(), to_name)
+            canonical_from = name_mapping.get(from_name.lower().strip()) or name_mapping.get(_concept_identity_key(from_name), from_name)
+            canonical_to = name_mapping.get(to_name.lower().strip()) or name_mapping.get(_concept_identity_key(to_name), to_name)
             
             if canonical_from.lower().strip() == canonical_to.lower().strip():
                 continue
@@ -986,7 +1042,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         freq_map = {}
         for n in all_nodes:
             name = n.get("name", "").strip().lower()
-            canonical_name = name_mapping.get(name, name).strip()
+            canonical_name = (name_mapping.get(name) or name_mapping.get(_concept_identity_key(name), name)).strip()
             freq_map[canonical_name] = freq_map.get(canonical_name, 0) + 1
 
         degree_map = {}
@@ -1144,6 +1200,13 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         # Always represent the uploaded research document itself as a Paper.
         paper_title = re.sub(r"^[0-9a-fA-F-]{36}_", "", filename)
         paper_title = re.sub(r"\.pdf$", "", paper_title, flags=re.IGNORECASE).strip()
+        concept_name_keys = {
+            _concept_identity_key(n.get("name", ""))
+            for n in canonical_nodes
+            if n.get("label") != "Paper"
+        }
+        if _concept_identity_key(paper_title) in concept_name_keys:
+            paper_title = f"Source: {paper_title}"
         paper_node = {
             "label": "Paper",
             "name": paper_title or "Uploaded Research Paper",
@@ -1156,7 +1219,8 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         # Generate Prerequisite Relationships via second LLM pass
         logger.info("Running second LLM pass for prerequisite generation...")
         concept_names = [n["name"] for n in canonical_nodes if n.get("label") not in ["Document", "Paper", "Citation", "Note", "Highlight"]]
-        prereqs = llm_client.extract_document_prerequisites(concept_names)
+        use_local_serverless = bool(os.getenv("VERCEL") and getattr(config, "SERVERLESS_LOCAL_EXTRACTION", True))
+        prereqs = [] if (use_local_serverless or getattr(llm_client, "_is_mock", False)) else llm_client.extract_document_prerequisites(concept_names)
         if prereqs:
             logger.info(f"Generated {len(prereqs)} PREREQUISITE relationships.")
             for req in prereqs:
