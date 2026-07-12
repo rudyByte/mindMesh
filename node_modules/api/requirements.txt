@@ -4,11 +4,5 @@ pydantic==2.13.4
 python-multipart==0.0.9
 PyMuPDF==1.26.6
 numpy
-onnxruntime
-pyclipper
-PyYAML
-shapely
-six
-tqdm
-opencv-python-headless==4.12.0.88
+opencv-python-headless==4.10.0.84
 rapidocr-onnxruntime
