@@ -63,7 +63,10 @@ def _ocr_pdf_pages(file_bytes: bytes) -> tuple[list[str], float | None]:
     tesseract_output = None
     ocr_import_errors: list[str] = []
     try:
-        from rapidocr_onnxruntime import RapidOCR
+        try:
+            from rapidocr import RapidOCR
+        except Exception:
+            from rapidocr_onnxruntime import RapidOCR
         rapid_engine = RapidOCR()
     except Exception as e:
         ocr_import_errors.append(f"RapidOCR unavailable: {e}")
@@ -90,15 +93,26 @@ def _ocr_pdf_pages(file_bytes: bytes) -> tuple[list[str], float | None]:
         image = pix.pil_image()
         if rapid_engine is not None:
             import numpy as np
-            result, _ = rapid_engine(np.array(image))
+            result = rapid_engine(np.array(image))
             page_lines = []
-            for item in result or []:
-                if len(item) >= 3:
-                    page_lines.append(str(item[1]))
+            if isinstance(result, tuple):
+                result = result[0]
+            if hasattr(result, "txts"):
+                for txt in getattr(result, "txts", []) or []:
+                    page_lines.append(str(txt))
+                for score in getattr(result, "scores", []) or []:
                     try:
-                        confidences.append(float(item[2]) * 100)
+                        confidences.append(float(score) * 100)
                     except Exception:
                         pass
+            else:
+                for item in result or []:
+                    if len(item) >= 3:
+                        page_lines.append(str(item[1]))
+                        try:
+                            confidences.append(float(item[2]) * 100)
+                        except Exception:
+                            pass
             ocr_pages.append("\n".join(page_lines))
         else:
             page_text = tesseract.image_to_string(image)

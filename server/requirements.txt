@@ -6,6 +6,7 @@ PyMuPDF==1.26.6
 pytesseract==0.3.13
 pillow==12.0.0
 rapidocr-onnxruntime
+rapidocr
 openai
 anthropic
 python-dotenv==1.0.1
