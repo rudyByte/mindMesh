@@ -1,6 +1,10 @@
 import logging
-from neo4j import GraphDatabase
 from server.config import config
+
+try:
+    from neo4j import GraphDatabase
+except Exception:  # Neo4j driver is optional in Blob/mock deployments.
+    GraphDatabase = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("neo4j_client")
@@ -15,6 +19,12 @@ class Neo4jClient:
 
     def connect(self):
         try:
+            if GraphDatabase is None:
+                logger.warning("Neo4j package unavailable. Starting in mock mode.")
+                self._is_mock = True
+                self._seed_mock_data()
+                return
+
             # Check if using default local dummy configs, trigger mock early
             if "localhost" in config.NEO4J_URI and config.NEO4J_PASSWORD == "password":
                 logger.warning("Default localhost credentials detected. Starting in mock mode.")
