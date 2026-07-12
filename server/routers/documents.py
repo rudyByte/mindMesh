@@ -8,7 +8,6 @@ from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
-from pypdf import PdfReader
 
 from server.utils.neo4j_client import neo4j_client
 from server.utils.supabase_client import supabase_client

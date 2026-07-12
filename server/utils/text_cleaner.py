@@ -3,17 +3,22 @@ import os
 import re
 import unicodedata
 from collections import Counter
-from pypdf import PdfReader
+
+
+def _raw_pdf_pages(file_bytes: bytes) -> list[str]:
+    try:
+        import fitz  # PyMuPDF
+    except Exception as e:
+        raise RuntimeError(f"PDF text extractor unavailable: {e}") from e
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    return [page.get_text("text") or "" for page in doc]
 
 def clean_pdf_text_from_bytes(file_bytes: bytes) -> tuple[str, list[str]]:
     """
     Given PDF file bytes, parses the text page by page and applies the clean_raw_pages function.
     Returns a tuple of (combined_cleaned_text, list_of_cleaned_pages).
     """
-    reader = PdfReader(io.BytesIO(file_bytes))
-    raw_pages = []
-    for page in reader.pages:
-        raw_pages.append(page.extract_text() or "")
+    raw_pages = _raw_pdf_pages(file_bytes)
     return clean_raw_pages(raw_pages)
 
 
@@ -23,8 +28,7 @@ def extract_pdf_text_with_metadata(file_bytes: bytes) -> tuple[str, list[str], d
     OCR is optional at runtime: if the required binary/deps are missing, metadata
     explains the failure so ingestion can surface a clear status instead of hanging.
     """
-    reader = PdfReader(io.BytesIO(file_bytes))
-    raw_pages = [(page.extract_text() or "") for page in reader.pages]
+    raw_pages = _raw_pdf_pages(file_bytes)
     text, cleaned_pages = clean_raw_pages(raw_pages)
     native_word_count = len(re.findall(r"\b\w+\b", text))
     metadata = {
@@ -139,15 +143,9 @@ def stream_clean_pdf_text_from_bytes(file_bytes: bytes, chunk_size: int = 10):
     Given PDF file bytes, parses the text page by page in chunks and yields the cleaned text chunks.
     This prevents memory exhaustion and timeouts for large PDFs (100+ pages).
     """
-    reader = PdfReader(io.BytesIO(file_bytes))
-    num_pages = len(reader.pages)
-    
-    for i in range(0, num_pages, chunk_size):
-        chunk_pages = []
-        for j in range(i, min(i + chunk_size, num_pages)):
-            chunk_pages.append(reader.pages[j].extract_text() or "")
-        
-        chunk_text, _ = clean_raw_pages(chunk_pages)
+    raw_pages = _raw_pdf_pages(file_bytes)
+    for i in range(0, len(raw_pages), chunk_size):
+        chunk_text, _ = clean_raw_pages(raw_pages[i:i + chunk_size])
         if chunk_text:
             yield chunk_text + "\n\n"
 
