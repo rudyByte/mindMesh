@@ -308,8 +308,8 @@ async def generate_live_stream(message: str, context: dict, history: list, user_
             await asyncio.sleep(0.003)
     except Exception as e:
         logger.error(f"Error during live Copilot stream: {e}")
-        # Fallback to simulated message if API fails
-        yield f"\n*(Notice: Live API call failed due to: {str(e)}. Falling back to mock assistant explanation)*\n\n"
+        # Fallback to a graph-grounded local response without exposing provider errors.
+        yield "\n*(Live AI is temporarily unavailable. Showing graph-grounded fallback.)*\n\n"
         async for chunk in generate_mock_stream(message, context):
             yield chunk
 
