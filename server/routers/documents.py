@@ -807,7 +807,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                         f"{filename} chunk {chunk_index + 1}",
                         main_topic_info,
                     )
-                    chunk_failed = True
+                    chunk_failed = False
                     extracted_nodes = result.get("nodes", [])
                     extracted_rels = result.get("relationships", [])
                     for node in extracted_nodes:
@@ -827,7 +827,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                         f"{filename} chunk {chunk_index + 1}",
                         main_topic_info,
                     )
-                    chunk_failed = True
+                    chunk_failed = False
 
             extracted_nodes = result.get("nodes", [])
             extracted_rels = result.get("relationships", [])
