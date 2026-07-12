@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import { useStore, GraphNode, GraphEdge } from '../store/useStore';
 import { API_BASE_URL } from '../lib/api';
 import { Layers, Loader2, Search, MapPin, Filter } from 'lucide-react';
-import { forceCollide } from 'd3-force';
+import { forceCollide, forceX, forceY } from 'd3-force';
 import LearningRoadmapOverlay from './LearningRoadmapOverlay';
 
 // Dynamically import force graph to prevent SSR errors in Next.js
@@ -419,49 +419,102 @@ export default function GraphCanvas() {
     }));
   }, [validatedGraphData.nodes]);
 
-  // Configure forces inside the force-directed simulation safely
+  // ── Hierarchical layout via D3 forces ────────────────────────────────
+  // Assign each node label a Y-tier. Topic nodes sit at the top, Concepts
+  // in the middle, Methods/Datasets/Papers one level below, Authors/Keywords
+  // near the bottom. forceX spreads nodes evenly within each tier.
   useEffect(() => {
-    if (fgRef.current) {
-      try {
-        const fg = fgRef.current;
-        
-        // Safely set many-body charge repulsion force if it exists
-        const chargeForce = fg.d3Force('charge');
-        if (chargeForce && typeof chargeForce.strength === 'function') {
-          chargeForce.strength(-700);
-        }
-        
-        // Safely set link distance force if it exists
-        const linkForce = fg.d3Force('link');
-        if (linkForce && typeof linkForce.distance === 'function') {
-          linkForce.distance(220);
-        }
-        
-        // Add safe collision detection force
-        const collideForce = forceCollide((node: any) => {
-          try {
-            const rawDegree = (nodeDegrees && node && node.id) ? (nodeDegrees[node.id] || 0) : 0;
-            const degree = typeof rawDegree === 'number' && !isNaN(rawDegree) && rawDegree >= 0 ? rawDegree : 0;
-            const radius = 3 + Math.sqrt(degree) * 1.5;
-            return radius + 100;
-          } catch (e) {
-            return 105;
-          }
-        });
-        
-        if (collideForce && typeof collideForce.iterations === 'function') {
-          fg.d3Force('collide', collideForce.iterations(3));
-        }
-        
-        // Reheat the simulation safely
-        if (typeof fg.d3ReheatSimulation === 'function') {
-          fg.d3ReheatSimulation();
-        }
-      } catch (err) {
-        console.error('Error configuring D3 forces:', err);
+    if (!fgRef.current) return;
+    try {
+      const fg = fgRef.current;
+      const canvasHeight = dimensions.height || 600;
+      const canvasWidth  = dimensions.width  || 800;
+
+      // ── Tier map: label → vertical band (0 = top, 1 = next …)
+      const TIER: Record<string, number> = {
+        Topic:   0,
+        Concept: 1,
+        Method:  2,
+        Dataset: 2,
+        Paper:   2,
+        Author:  3,
+        Keyword: 3,
+      };
+
+      // Y target for each tier — spread over 80 % of canvas height
+      const NUM_TIERS = 4;
+      const ySpan    = canvasHeight * 0.80;
+      const yStart   = -ySpan / 2;
+      const yStep    = ySpan / (NUM_TIERS - 1);
+      const tierY = (tier: number) => yStart + tier * yStep;
+
+      // Group node IDs by tier so we can spread them in X
+      const tierGroups: Record<number, string[]> = {};
+      for (let t = 0; t < NUM_TIERS; t++) tierGroups[t] = [];
+
+      (filteredNodes as any[]).forEach((n: any) => {
+        const tier = TIER[n.label] ?? 1;
+        tierGroups[tier].push(n.id);
+      });
+
+      // ── Charge: moderate repulsion so tiers don't collapse
+      const chargeForce = fg.d3Force('charge');
+      if (chargeForce && typeof chargeForce.strength === 'function') {
+        chargeForce.strength(-550);
       }
+
+      // ── Link: shorter distance inside the same tier, longer across tiers
+      const linkForce = fg.d3Force('link');
+      if (linkForce && typeof linkForce.distance === 'function') {
+        linkForce.distance((link: any) => {
+          try {
+            const srcId = typeof link.source === 'object' ? link.source?.id : link.source;
+            const tgtId = typeof link.target === 'object' ? link.target?.id : link.target;
+            const srcNode = (filteredNodes as any[]).find((n: any) => n.id === srcId);
+            const tgtNode = (filteredNodes as any[]).find((n: any) => n.id === tgtId);
+            const srcTier = TIER[srcNode?.label] ?? 1;
+            const tgtTier = TIER[tgtNode?.label] ?? 1;
+            return srcTier === tgtTier ? 160 : 220;
+          } catch { return 190; }
+        });
+      }
+
+      // ── forceY: pull each node toward its tier's Y band (strong)
+      fg.d3Force('y', forceY((node: any) => {
+        const tier = TIER[node.label] ?? 1;
+        return tierY(tier);
+      }).strength(0.55));
+
+      // ── forceX: spread nodes across canvas width within each tier
+      fg.d3Force('x', forceX((node: any) => {
+        const tier = TIER[node.label] ?? 1;
+        const siblings = tierGroups[tier];
+        const idx = siblings.indexOf(node.id);
+        const count = Math.max(1, siblings.length);
+        // Distribute evenly across 80% of canvas width
+        return -canvasWidth * 0.40 + (idx / Math.max(count - 1, 1)) * canvasWidth * 0.80;
+      }).strength(0.35));
+
+      // ── Collision: prevent node overlap
+      const collideForce = forceCollide((node: any) => {
+        try {
+          const rawDegree = (nodeDegrees && node && node.id) ? (nodeDegrees[node.id] || 0) : 0;
+          const degree = typeof rawDegree === 'number' && !isNaN(rawDegree) && rawDegree >= 0 ? rawDegree : 0;
+          return 4 + Math.sqrt(degree) * 1.8 + 52;
+        } catch { return 56; }
+      });
+      if (collideForce && typeof collideForce.iterations === 'function') {
+        fg.d3Force('collide', collideForce.iterations(4));
+      }
+
+      // Reheat so the new forces take effect
+      if (typeof fg.d3ReheatSimulation === 'function') {
+        fg.d3ReheatSimulation();
+      }
+    } catch (err) {
+      console.error('Error configuring hierarchical D3 forces:', err);
     }
-  }, [filteredNodes, nodeDegrees]);
+  }, [filteredNodes, nodeDegrees, dimensions]);
 
   // Helper to detect if a link is part of the learning path
   const isPathLink = (link: any) => {
@@ -753,9 +806,11 @@ export default function GraphCanvas() {
                 return 3.0;
               }
             }}
-            linkCurvature={0.25}
+            linkCurvature={0.15}
             linkDirectionalArrowLength={8}
-            cooldownTicks={graphMode === 'path' ? 0 : 120}
+            cooldownTicks={graphMode === 'path' ? 0 : 400}
+            d3AlphaDecay={0.015}
+            d3VelocityDecay={0.35}
             linkDirectionalArrowRelPos={1}
             linkDirectionalParticles={(link: any) => {
               try {
