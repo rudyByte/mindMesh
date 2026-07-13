@@ -1305,7 +1305,9 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
         concepts_keywords = [n for n in canonical_nodes if n.get("label") in ["Concept", "Keyword", "Method", "Dataset"]]
         other_nodes = [n for n in canonical_nodes if n.get("label") not in ["Concept", "Keyword", "Method", "Dataset"]]
 
-        if total_chunks and fallback_chunks == total_chunks:
+        full_local_fallback = bool(total_chunks and fallback_chunks == total_chunks)
+
+        if full_local_fallback:
             fallback_junk = {
                 "just", "stuck", "relation", "fashion", "board", "lower panel", "second digit",
                 "fourth color", "black wire", "green wire", "white wire", "purple wire", "below red wire",
@@ -1335,8 +1337,10 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             reverse=True
         )
 
-        # Keep a tighter graph when every chunk used local fallback; this avoids noisy phrase clouds.
-        max_kept = 28 if (total_chunks and fallback_chunks == total_chunks) else 80
+        # Keep fallback graphs clean for short docs, but let long PDFs scale.
+        # This preserves the spec invariant: big documents should not collapse to
+        # the same ~10-20 node graph as short papers when live LLM is unavailable.
+        max_kept = min(140, max(28, 18 + total_chunks * 8)) if full_local_fallback else 80
         kept_concepts_keywords = concepts_keywords[:max_kept]
         kept_names = set(n["name"].lower().strip() for n in kept_concepts_keywords)
         for n in other_nodes:
@@ -1350,7 +1354,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
             if rel["from"].lower().strip() in kept_names and rel["to"].lower().strip() in kept_names
         ]
 
-        if total_chunks and fallback_chunks == total_chunks:
+        if full_local_fallback:
             main_topic_key = _concept_identity_key(main_topic_info.get("name") or filename.rsplit(".", 1)[0])
             merged_relationships = [
                 rel for rel in merged_relationships
@@ -1363,7 +1367,7 @@ def run_extraction_pipeline(doc_id: str, file_bytes: bytes, filename: str, sessi
                 text=text,
                 nodes=canonical_nodes,
                 relationships=merged_relationships,
-                max_extra_edges=55,
+                max_extra_edges=min(220, max(55, total_chunks * 10)),
             )
 
         # Ensure graph connectivity (connect isolated nodes/subgraphs to the central node)
