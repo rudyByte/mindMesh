@@ -145,6 +145,57 @@ def _hierarchy_from_payload(graph: dict, focus: str, up: int, down: int) -> Opti
     return {"prerequisites": prerequisites, "target": payload(focus, 0), "extensions": extensions, "applications": applications, "related": related}
 
 
+def _shortest_path_from_payload(graph: dict, from_id: str, to_id: str) -> Optional[dict]:
+    nodes = {n.get("id"): n for n in graph.get("nodes", []) if n.get("id")}
+    if from_id not in nodes or to_id not in nodes:
+        return None
+    if from_id == to_id:
+        return {"nodes": [nodes[from_id]], "edges": []}
+
+    adjacency: dict[str, list[tuple[str, dict]]] = {}
+    for raw in graph.get("edges", []) or []:
+        src = raw.get("from") or raw.get("source")
+        dst = raw.get("to") or raw.get("target")
+        if isinstance(src, dict):
+            src = src.get("id")
+        if isinstance(dst, dict):
+            dst = dst.get("id")
+        if not src or not dst or src not in nodes or dst not in nodes:
+            continue
+        edge = {"from": src, "to": dst, "type": raw.get("type", "RELATED_TO")}
+        adjacency.setdefault(src, []).append((dst, edge))
+        adjacency.setdefault(dst, []).append((src, edge))
+
+    queue = [from_id]
+    parent: dict[str, tuple[str, dict] | None] = {from_id: None}
+    while queue:
+        current = queue.pop(0)
+        if current == to_id:
+            break
+        for nxt, edge in adjacency.get(current, []):
+            if nxt in parent:
+                continue
+            parent[nxt] = (current, edge)
+            queue.append(nxt)
+
+    if to_id not in parent:
+        return {"nodes": [], "edges": []}
+
+    path_node_ids = []
+    path_edges = []
+    cursor = to_id
+    while cursor:
+        path_node_ids.append(cursor)
+        prev = parent.get(cursor)
+        if prev is None:
+            break
+        cursor, edge = prev
+        path_edges.append(edge)
+    path_node_ids.reverse()
+    path_edges.reverse()
+    return {"nodes": [nodes[nid] for nid in path_node_ids], "edges": path_edges}
+
+
 @router.patch("/graph/node/{node_id}")
 def correct_graph_node(node_id: str, payload: NodeCorrectionRequest):
     """Manual graph correction: rename and/or update a node description."""
@@ -861,6 +912,13 @@ def get_shortest_path(
     session_id: Optional[str] = Query(None, description="Session ID to validate ownership and restrict path")
 ):
     if neo4j_client.is_mock():
+        persisted = _load_persisted_session_graph(session_id)
+        if persisted:
+            persisted_path = _shortest_path_from_payload(persisted, from_id, to_id)
+            if persisted_path is None:
+                raise HTTPException(status_code=403, detail="Access denied. Nodes do not belong to the specified session.")
+            return persisted_path
+
         res = neo4j_client.run_query("MATCH path", {"from_id": from_id, "to_id": to_id, "document_id": document_id, "session_id": session_id})
         # If either node doesn't belong to the document/session, validate in mock
         doc_node_ids = set()

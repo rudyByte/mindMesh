@@ -914,6 +914,8 @@ export function RightSidebar() {
   const [pathGenerating, setPathGenerating] = useState(false);
   const [editName, setEditName] = useState('');
   const [mergeTargetId, setMergeTargetId] = useState('');
+  const [pathTargetId, setPathTargetId] = useState('');
+  const [pathStatus, setPathStatus] = useState<string | null>(null);
   const [correctionStatus, setCorrectionStatus] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isOpen, setIsOpen] = useState(true);
@@ -924,6 +926,8 @@ export function RightSidebar() {
       setGapError(null);
       setEditName(selectedNode.name || '');
       setMergeTargetId('');
+      setPathTargetId('');
+      setPathStatus(null);
       setCorrectionStatus(null);
     }
   }, [selectedNode]);
@@ -1253,6 +1257,39 @@ export function RightSidebar() {
     if (res.ok) await refreshAfterCorrection();
   };
 
+  const handleShowShortestPath = async () => {
+    if (!selectedNode || !pathTargetId) return;
+    setPathStatus('Finding shortest path...');
+    try {
+      const scope = sessionId
+        ? `session_id=${encodeURIComponent(sessionId)}`
+        : `document_id=${encodeURIComponent(activeDocumentId || 'doc-1')}`;
+      const url = `${API_BASE_URL}/graph/path?from_id=${encodeURIComponent(selectedNode.id)}&to_id=${encodeURIComponent(pathTargetId)}&${scope}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        setPathStatus(res.status === 404 ? 'No path found between these nodes.' : `Path unavailable (${res.status}).`);
+        return;
+      }
+      const data = await res.json();
+      const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+      const edges = Array.isArray(data.edges) ? data.edges : [];
+      if (!nodes.length) {
+        setPathStatus('No path found between these nodes.');
+        setActivePathNodeIds([]);
+        setLearningPathNarration(null);
+        return;
+      }
+      appendGraphData({ nodes, edges });
+      setActivePathNodeIds(nodes.map((n: any) => n.id));
+      const target = globalNodes.find(n => n.id === pathTargetId);
+      setLearningPathNarration(`Shortest graph path from ${selectedNode.name} to ${target?.name || 'selected node'} highlighted on the canvas.`);
+      setPathStatus(`Path found: ${nodes.length} nodes, ${edges.length} edges.`);
+    } catch (err) {
+      console.error('Failed to retrieve shortest path', err);
+      setPathStatus('Could not load shortest path.');
+    }
+  };
+
   if (!isOpen) {
     return (
       <div className="absolute top-24 right-0 z-40">
@@ -1373,7 +1410,40 @@ export function RightSidebar() {
                   })}
                 </div>
               )}
-              {correctionStatus && <p className="text-[10px] text-amber-200 font-mono">{correctionStatus}</p>}
+            {correctionStatus && <p className="text-[10px] text-amber-200 font-mono">{correctionStatus}</p>}
+          </div>
+
+            {/* Shortest Path / Compare */}
+            <div className="p-3.5 glass-card rounded-xl border border-cyan-500/15 bg-cyan-950/5 space-y-3">
+              <h4 className="text-[9px] font-mono font-bold text-cyan-300 uppercase tracking-widest flex items-center gap-1">
+                <Radar className="w-3.5 h-3.5" /> Shortest Path
+              </h4>
+              <p className="text-[10px] text-slate-500 leading-normal">
+                Compare this node with another node and highlight the connecting path on the map.
+              </p>
+              <div className="flex gap-2">
+                <select
+                  value={pathTargetId}
+                  onChange={(e) => setPathTargetId(e.target.value)}
+                  className="flex-1 min-w-0 px-2 py-1.5 rounded-lg bg-[#030c0b] border border-cyan-500/15 text-[11px] text-slate-200 focus:outline-none focus:border-cyan-400/50"
+                >
+                  <option value="">Choose target node...</option>
+                  {globalNodes
+                    .filter(n => n.id !== selectedNode.id)
+                    .slice(0, 180)
+                    .map(n => (
+                      <option key={n.id} value={n.id}>{n.name}</option>
+                    ))}
+                </select>
+                <button
+                  disabled={!pathTargetId}
+                  onClick={handleShowShortestPath}
+                  className="px-2.5 py-1.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 disabled:opacity-40 border border-cyan-500/20 text-[10px] font-bold text-cyan-200 uppercase"
+                >
+                  Show
+                </button>
+              </div>
+              {pathStatus && <p className="text-[10px] text-cyan-200 font-mono">{pathStatus}</p>}
             </div>
 
             {/* Context Card (Sprint 3) */}
