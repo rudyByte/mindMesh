@@ -346,6 +346,28 @@ class LLMClient:
             logger.warning("No valid LLM API key detected. Starting LLM client in mock mode.")
             self._is_mock = True
 
+    @staticmethod
+    def _is_auth_failure(error: Exception) -> bool:
+        if isinstance(error, urllib.error.HTTPError) and error.code in {401, 403}:
+            return True
+        text = str(error).lower()
+        return any(token in text for token in ["http error 401", "http error 403", "http 401", "http 403", "unauthorized", "forbidden"])
+
+    def _disable_provider_after_auth_failure(self, provider: str, error: Exception) -> None:
+        if not self._is_auth_failure(error):
+            return
+        if provider == "anthropic":
+            self._anthropic_client = None
+            self._anthropic_http = False
+        elif provider == "groq":
+            self._client = None
+        if not self._anthropic_client and not self._anthropic_http and not self._client:
+            self._is_mock = True
+        logger.warning(f"Disabled {provider} LLM provider after auth failure; local extraction fallback will be used.")
+
+    def provider_unavailable(self) -> bool:
+        return self._is_mock or (not self._anthropic_client and not self._anthropic_http and not self._client)
+
     def _anthropic_complete(self, system_prompt: str, user_prompt: str, max_tokens: int, temperature: float = 0) -> str:
         payload = json.dumps({
             "model": config.ANTHROPIC_MODEL,
@@ -378,46 +400,71 @@ class LLMClient:
 
     def _complete_text(self, system_prompt: str, user_prompt: str, max_tokens: int, temperature: float = 0, prefer_anthropic: bool = False) -> str:
         if prefer_anthropic and self._anthropic_client:
-            response = self._anthropic_client.messages.create(
-                model=config.ANTHROPIC_MODEL,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-            )
-            return "".join(
-                block.text for block in response.content
-                if getattr(block, "type", None) == "text" and getattr(block, "text", None)
-            ).strip()
+            try:
+                response = self._anthropic_client.messages.create(
+                    model=config.ANTHROPIC_MODEL,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                )
+                return "".join(
+                    block.text for block in response.content
+                    if getattr(block, "type", None) == "text" and getattr(block, "text", None)
+                ).strip()
+            except Exception as e:
+                self._disable_provider_after_auth_failure("anthropic", e)
+                if not self._is_auth_failure(e):
+                    raise
         if prefer_anthropic and self._anthropic_http:
-            return self._anthropic_complete(system_prompt, user_prompt, max_tokens, temperature)
+            try:
+                return self._anthropic_complete(system_prompt, user_prompt, max_tokens, temperature)
+            except Exception as e:
+                self._disable_provider_after_auth_failure("anthropic", e)
+                if not self._is_auth_failure(e):
+                    raise
 
         if self._client:
-            response = self._client.chat.completions.create(
-                model=config.GROQ_MODEL,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            )
-            return response.choices[0].message.content.strip()
+            try:
+                response = self._client.chat.completions.create(
+                    model=config.GROQ_MODEL,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                )
+                return response.choices[0].message.content.strip()
+            except Exception as e:
+                self._disable_provider_after_auth_failure("groq", e)
+                if not self._is_auth_failure(e):
+                    raise
 
         if self._anthropic_client:
-            response = self._anthropic_client.messages.create(
-                model=config.ANTHROPIC_MODEL,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-            )
-            return "".join(
-                block.text for block in response.content
-                if getattr(block, "type", None) == "text" and getattr(block, "text", None)
-            ).strip()
+            try:
+                response = self._anthropic_client.messages.create(
+                    model=config.ANTHROPIC_MODEL,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                )
+                return "".join(
+                    block.text for block in response.content
+                    if getattr(block, "type", None) == "text" and getattr(block, "text", None)
+                ).strip()
+            except Exception as e:
+                self._disable_provider_after_auth_failure("anthropic", e)
+                if not self._is_auth_failure(e):
+                    raise
         if self._anthropic_http:
-            return self._anthropic_complete(system_prompt, user_prompt, max_tokens, temperature)
+            try:
+                return self._anthropic_complete(system_prompt, user_prompt, max_tokens, temperature)
+            except Exception as e:
+                self._disable_provider_after_auth_failure("anthropic", e)
+                if not self._is_auth_failure(e):
+                    raise
 
         raise RuntimeError("No LLM provider available.")
 
